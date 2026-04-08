@@ -117,8 +117,14 @@ app.post('/api/check-reassignment', async (req, res) => {
 
 // ─── Stats ──────────────────────────────────────────────────
 app.get('/api/stats', async (_, res) => {
-  try { return res.json({ code: 200, data: await db.getDashboardStats() }); }
-  catch (e) { console.error('[stats]', e); return res.status(500).json({ code: 500, message: e.message }); }
+  try {
+    return res.json({ code: 200, data: await db.getDashboardStats() });
+  } catch (e) {
+    console.error('[stats] Error fetching dashboard stats:');
+    console.error('[stats] Message:', e.message);
+    console.error('[stats] Stack:\n', e.stack);
+    return res.status(500).json({ code: 500, message: e.message });
+  }
 });
 
 // ─── Logs ───────────────────────────────────────────────────

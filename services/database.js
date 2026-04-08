@@ -103,21 +103,41 @@ async function getRecentLogs(limit) {
 
 // ─── Dashboard Stats ───────────────────────────────────────
 
+const STATS_QUERY_TIMEOUT_MS = 10000; // 10 seconds
+
 async function getDashboardStats() {
-  const { rows: leads } = await pool.query('SELECT * FROM leads ORDER BY created_at DESC');
+  console.log('[getDashboardStats] Starting query at', new Date().toISOString());
+  const startTime = Date.now();
+
+  const queryPromise = pool.query('SELECT * FROM leads ORDER BY created_at DESC');
+  const timeoutPromise = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('getDashboardStats query timed out after ' + STATS_QUERY_TIMEOUT_MS + 'ms')), STATS_QUERY_TIMEOUT_MS)
+  );
+
+  const { rows: leads } = await Promise.race([queryPromise, timeoutPromise]);
+
+  const elapsed = Date.now() - startTime;
+  console.log('[getDashboardStats] Query returned', leads.length, 'rows in', elapsed + 'ms');
 
   let total = 0, assigned = 0, reassignedCount = 0, active = 0, waSent = 0, waFailed = 0;
-  for (const l of leads) {
-    total++;
-    if (l.lead_status === 'Assigned') assigned++;
-    if (l.lead_status === 'Active') active++;
-    if (l.reassigned === true) reassignedCount++;
-    if (l.whatsapp_p0_status === 'Sent') waSent++;
-    if (l.whatsapp_p0_status === 'Failed') waFailed++;
-    if (l.whatsapp_p1_status === 'Sent') waSent++;
-    if (l.whatsapp_p1_status === 'Failed') waFailed++;
+  try {
+    for (const l of leads) {
+      total++;
+      if (l.lead_status === 'Assigned') assigned++;
+      if (l.lead_status === 'Active') active++;
+      if (l.reassigned === true) reassignedCount++;
+      if (l.whatsapp_p0_status === 'Sent') waSent++;
+      if (l.whatsapp_p0_status === 'Failed') waFailed++;
+      if (l.whatsapp_p1_status === 'Sent') waSent++;
+      if (l.whatsapp_p1_status === 'Failed') waFailed++;
+    }
+  } catch (iterErr) {
+    console.error('[getDashboardStats] Error during row iteration at index', total, ':', iterErr.message);
+    console.error('[getDashboardStats] Stack:\n', iterErr.stack);
+    throw iterErr;
   }
 
+  console.log('[getDashboardStats] Aggregation complete — total:', total, 'assigned:', assigned, 'active:', active, 'reassigned:', reassignedCount);
   return { total, assigned, reassigned: reassignedCount, active, whatsappSent: waSent, whatsappFailed: waFailed, leads };
 }
 
