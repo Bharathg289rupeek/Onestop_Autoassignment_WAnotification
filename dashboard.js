@@ -122,7 +122,7 @@ function getDashboardHTML(baseUrl) {
 '      <input class="search-input" id="searchAgents" placeholder="Search agents..." oninput="renderAgents()">\n' +
 '      <button class="btn btn-primary" onclick="openAgentModal()">+ Add Agent</button>\n' +
 '      <button class="btn" onclick="openCSVModal()">&#128196; Upload CSV</button>\n' +
-'      <a class="btn" href="' + baseUrl + '/api/agents/download-csv" target="_blank">&#11015; Download CSV</a>\n' +
+'      <a class="btn" href="/api/agents/download-csv" target="_blank">&#11015; Download CSV</a>\n' +
 '    </div>\n' +
 '    <div class="tbl-wrap"><table><thead><tr>\n' +
 '      <th>Branch</th><th>Email</th><th>Name</th><th>Phone</th><th>City</th><th>Pincode</th>\n' +
@@ -225,7 +225,7 @@ function getDashboardHTML(baseUrl) {
 '</div></div>\n' +
 '\n' +
 '<script>\n' +
-'var API = "' + baseUrl + '/api";\n' +
+'var API = window.location.origin + \"/api\";\n' +
 'var allLeads = [], allAgents = [], allSources = [];\n' +
 '\n' +
 '// ── Toast ──\n' +

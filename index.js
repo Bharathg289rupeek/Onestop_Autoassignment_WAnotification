@@ -226,7 +226,8 @@ app.delete('/api/source-config/:id', async (req, res) => {
 
 // ─── Dashboard HTML ─────────────────────────────────────────
 app.get('/', (req, res) => {
-  const baseUrl = req.protocol + '://' + req.get('host');
+  const protocol = req.get('x-forwarded-proto') || req.protocol;
+  const baseUrl = protocol + '://' + req.get('host');
   res.send(getDashboardHTML(baseUrl));
 });
 
