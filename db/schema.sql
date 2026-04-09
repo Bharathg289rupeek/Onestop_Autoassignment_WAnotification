@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS leads (
   lead_source VARCHAR(100),
 
   -- Assignment
-  assigned_agent_id INTEGER REFERENCES agents(id),
+  assigned_agent_id INTEGER REFERENCES agents(id) ON UPDATE CASCADE ON DELETE SET NULL,
   assigned_email VARCHAR(255),
   assigned_name VARCHAR(255),
   assigned_phone VARCHAR(20),
@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS leads (
 
   -- Reassignment
   reassigned BOOLEAN NOT NULL DEFAULT false,
-  reassigned_agent_id INTEGER REFERENCES agents(id),
+  reassigned_agent_id INTEGER REFERENCES agents(id) ON UPDATE CASCADE ON DELETE SET NULL,
   reassigned_email VARCHAR(255),
   reassigned_name VARCHAR(255),
   reassigned_phone VARCHAR(20),
