@@ -25,7 +25,7 @@ async function assignLead(lead, agent) {
       firstname: lead.name, phone: String(lead.phone),
       leadSource: leadSource,
       loanAmount: parseFloat(lead.loan_amount), loanType: parseInt(lead.loan_type) || 2,
-      priorityScore: 1.0, stage: 'New', state: 'New', status: 'Open',
+      priorityScore: 9.9, stage: 'New', state: 'New', status: 'Open',
       leadID: lead.lead_id, submitDay: new Date().toISOString(),
     };
     const response = await onestopClient.post('/meetingBubbleLeadsV2', payload);
