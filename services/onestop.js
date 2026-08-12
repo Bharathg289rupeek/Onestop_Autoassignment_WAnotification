@@ -19,16 +19,14 @@ async function assignLead(lead, agent) {
     const leadSource = lead.assigned_source || lead.lead_source || 'Qualified';
 
     const payload = {
-      assignedTo: agent.agent_email,
-      agentCode: '', agentName: agent.agent_name, agentRole: '',
-      city: lead.city || config.DEFAULT_CITY,
-      firstname: lead.name, phone: String(lead.phone),
-      leadSource: leadSource,
-      loanAmount: parseFloat(lead.loan_amount), loanType: parseInt(lead.loan_type) || 2,
-      priorityScore: 9.9, stage: 'New', state: 'New', status: 'Open',
-      leadID: lead.lead_id, submitDay: new Date().toISOString(),
+      agent_Email: agent.agent_email,
+      agent_Name: agent.agent_name,
+      agent_Phone: agent.agent_phone,
     };
-    const response = await onestopClient.post('/meetingBubbleLeadsV2', payload);
+    const response = await onestopClient.put(
+      `/leadsvcapi/v2/lead/assignAgent/${lead.lead_id}?assignByDefault=false`,
+      payload
+    );
     const success = response.data.code === 200;
     await db.appendLog('ONESTOP_ASSIGN', lead.lead_id, lead.phone,
       `Assigned to ${agent.agent_email} (source: ${leadSource}) → ${JSON.stringify(response.data).slice(0, 200)}`,
@@ -58,10 +56,14 @@ async function getLeadDetails(assignedEmail, phone) {
 async function updateAssignment(leadId, newAgent) {
   try {
     const payload = {
-      stage: 'New', state: 'New', status: 'Open', leadIds: [leadId],
-      agent_detail: { agent_Email: newAgent.agent_email, agent_Name: newAgent.agent_name, agent_Phone: newAgent.agent_phone },
+      agent_Email: newAgent.agent_email,
+      agent_Name: newAgent.agent_name,
+      agent_Phone: newAgent.agent_phone,
     };
-    const response = await onestopClient.put('/meetingLeads/bulkUpdate', payload);
+    const response = await onestopClient.put(
+      `/leadsvcapi/v2/lead/assignAgent/${leadId}?assignByDefault=false`,
+      payload
+    );
     await db.appendLog('ONESTOP_REASSIGN', leadId, '', `Reassigned to ${newAgent.agent_email}`, 'SUCCESS');
     return { success: true, data: response.data };
   } catch (err) {
