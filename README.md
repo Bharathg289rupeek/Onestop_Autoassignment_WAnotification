@@ -37,14 +37,15 @@ An agent is *assignable* for a pincode when all three hold:
 
 Each agent carries `last_assigned_at` and `assign_count`. The next lead goes to
 the **least-recently-assigned** assignable agent in the pincode; ties break on
-`assign_count`, then `priority`, then `id`.
+`assign_count`, then `id`.
 
-- Load spreads evenly instead of always hitting the P1 agent.
+- Load spreads evenly instead of always hitting the same agent.
 - A newly added agent has `last_assigned_at = NULL`, so they sort first and join
   the rotation immediately.
 - Deactivating an agent or flipping them to `dont assign` drops them out with no
   other change needed.
-- `priority` is now only a tiebreaker, not the selector.
+- `priority` is not used in assignment at all — it's pure round robin. The
+  column is kept on the agent record for reference only.
 
 Claims are serialised per pincode with a Postgres transaction-scoped advisory
 lock, so a burst of simultaneous webhooks for the same pincode is queued rather

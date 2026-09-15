@@ -31,8 +31,9 @@ function normalizePincode(pin) {
  * advisory lock instead means a burst is queued rather than discarded.)
  *
  * Rotation order: least-recently-assigned first. Agents never assigned (NULL)
- * come first, so a newly added agent joins the rotation immediately. priority
- * assign_count, priority then id break ties deterministically.
+ * come first, so a newly added agent joins the rotation immediately.
+ * assign_count, then id break ties deterministically — priority is not used,
+ * assignment is pure round robin.
  *
  * @param {string} pincode              lead pincode
  * @param {number|null} excludeAgentId  skip this agent (used on reassignment)
@@ -54,7 +55,7 @@ async function claimAgentByPincode(pincode, excludeAgentId) {
           AND pincode_identifier = 'assign'
           AND is_active = true
           AND ($2::int IS NULL OR id <> $2::int)
-        ORDER BY last_assigned_at ASC NULLS FIRST, assign_count ASC, priority ASC, id ASC
+        ORDER BY last_assigned_at ASC NULLS FIRST, assign_count ASC, id ASC
         LIMIT 1`,
       [pin, excludeAgentId || null]
     );
