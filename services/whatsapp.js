@@ -46,7 +46,7 @@ function resolveParam(token, lead, agent, ctaLink) {
 async function sendWhatsAppToAgent(agentPhone, lead, agent, isReassignment, overrideTemplateId) {
   // ── Resolve CTA base URL (prefer DB setting, fall back to config) ──
   const ctaBase = (await db.getSystemConfig('LEAD_CTA_BASE_URL')) || config.LEAD_CTA_BASE_URL;
-  const ctaLink = ctaBase + '/leads/details/' + lead.lead_id;
+  const ctaLink = ctaBase + '/leads/details/' + (lead.external_id || lead.lead_id);
 
   // ── Fetch per-source template config from DB ──
   const tplConfig = await db.getWhatsappTemplateConfig(lead.lead_source);

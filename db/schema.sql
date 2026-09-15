@@ -102,6 +102,7 @@ CREATE TABLE IF NOT EXISTS leads (
   activity_checked BOOLEAN NOT NULL DEFAULT false,
   lead_status VARCHAR(50) NOT NULL DEFAULT 'Assigned',
   onestop_lead_id VARCHAR(100),
+  external_id VARCHAR(150),
 
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   last_updated TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -122,6 +123,10 @@ CREATE TABLE IF NOT EXISTS logs (
 -- Safe to re-run: these are no-ops once the columns exist.
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS last_assigned_at TIMESTAMPTZ;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS assign_count INTEGER NOT NULL DEFAULT 0;
+
+-- ── External lead ID (lead_source_assigned_source_date_phone) ──
+-- Sent to WhatsApp (CTA link) and OneStop (leadID) instead of lead_id.
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS external_id VARCHAR(150);
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_agents_branch    ON agents(branch_id, priority);

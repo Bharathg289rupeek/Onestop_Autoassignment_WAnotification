@@ -6,7 +6,7 @@ const { initDB } = require('./db');
 const db = require('./services/database');
 const onestop = require('./services/onestop');
 const whatsapp = require('./services/whatsapp');
-const { generateLeadId, parseCSV } = require('./utils/helpers');
+const { generateLeadId, buildExternalId, parseCSV } = require('./utils/helpers');
 const { getDashboardHTML } = require('./dashboard');
 
 const app = express();
@@ -31,6 +31,9 @@ app.post('/api/receive-lead', async (req, res) => {
     const leadId = payload.lead_id || generateLeadId();
     const phone = String(payload.phone).trim();
     const pincode = db.normalizePincode(payload.pincode);
+    // External-facing ID (sent to WhatsApp CTA link + OneStop leadID) instead
+    // of the internal lead_id: lead_source_assigned_source_date_phone.
+    const externalId = buildExternalId(payload.lead_source, payload.assigned_source, phone);
 
     console.log('[receiveLead] Processing ' + leadId + ' pin=' + (pincode || 'NONE') + ' source=' + payload.lead_source);
 
@@ -38,7 +41,7 @@ app.post('/api/receive-lead', async (req, res) => {
     const baseLead = {
       lead_id: leadId, phone, name: payload.name, loan_amount: payload.loan_amount,
       branch_id: payload.branch_id || null, city: payload.city || null, pincode: pincode || null,
-      loan_type: payload.loan_type, lead_source: payload.lead_source,
+      loan_type: payload.loan_type, lead_source: payload.lead_source, external_id: externalId,
     };
 
     // ── Agent resolution ──────────────────────────────────────
@@ -143,7 +146,7 @@ app.post('/api/check-reassignment', async (req, res) => {
           results.errors++;
           continue;
         }
-        await onestop.updateAssignment(lead.onestop_lead_id || lead.lead_id, nextAgent);
+        await onestop.updateAssignment(lead.onestop_lead_id || lead.external_id || lead.lead_id, nextAgent);
         const waResult = await whatsapp.sendWhatsAppToAgent(nextAgent.agent_phone, lead, nextAgent, true);
         await db.reassignLead(lead.lead_id, nextAgent);
         await db.updateLeadWhatsapp(lead.lead_id, 'p1', waResult.success ? 'Sent' : 'Failed');

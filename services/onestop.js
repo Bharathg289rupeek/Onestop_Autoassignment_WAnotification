@@ -26,7 +26,7 @@ async function assignLead(lead, agent) {
       leadSource: leadSource,
       loanAmount: parseFloat(lead.loan_amount), loanType: parseInt(lead.loan_type) || 2,
       priorityScore: 9.9, stage: 'New', state: 'New', status: 'Open',
-      leadID: lead.lead_id, submitDay: new Date().toISOString(),
+      leadID: lead.external_id || lead.lead_id, submitDay: new Date().toISOString(),
     };
     const response = await onestopClient.post('/meetingBubbleLeadsV2', payload);
     const success = response.data.code === 200;

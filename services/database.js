@@ -123,16 +123,16 @@ async function insertLead(data) {
     `INSERT INTO leads
        (lead_id, phone, name, loan_amount, branch_id, city, pincode, loan_type, lead_source,
         assigned_agent_id, assigned_email, assigned_name, assigned_phone, assigned_priority,
-        assigned_at, lead_status, onestop_lead_id, activity_checked, whatsapp_p0_status)
+        assigned_at, lead_status, onestop_lead_id, activity_checked, whatsapp_p0_status, external_id)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
         CASE WHEN $10::int IS NULL THEN NULL ELSE NOW() END, $15, $16,
         CASE WHEN $10::int IS NULL THEN true ELSE false END,
-        CASE WHEN $10::int IS NULL THEN 'Skipped' ELSE 'Pending' END)
+        CASE WHEN $10::int IS NULL THEN 'Skipped' ELSE 'Pending' END, $17)
      RETURNING *`,
     [data.lead_id, data.phone, data.name, data.loan_amount, data.branch_id, data.city,
      data.pincode, data.loan_type, data.lead_source, data.agent_id || null, data.agent_email || null,
      data.agent_name || null, data.agent_phone || null, data.agent_priority || null,
-     status, data.onestop_lead_id || null]
+     status, data.onestop_lead_id || null, data.external_id || null]
   );
   return rows[0];
 }

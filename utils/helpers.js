@@ -5,6 +5,21 @@ function generateLeadId() {
 }
 
 /**
+ * External-facing lead identifier sent to WhatsApp (CTA link) and OneStop
+ * (leadID), built as lead_source_assigned_source_date_phone instead of the
+ * internal lead_id.
+ */
+function buildExternalId(leadSource, assignedSource, phone) {
+  const now = new Date();
+  const dateStr = now.getFullYear().toString() +
+    String(now.getMonth() + 1).padStart(2, '0') +
+    String(now.getDate()).padStart(2, '0');
+  const src = leadSource || 'NA';
+  const affiliate = assignedSource || 'NA';
+  return [src, affiliate, dateStr, phone].join('_');
+}
+
+/**
  * Parse CSV text into array of objects.
  * Handles quoted fields, commas inside quotes, and newlines.
  */
@@ -78,4 +93,4 @@ function splitCSVLine(line) {
   return result;
 }
 
-module.exports = { generateLeadId, parseCSV };
+module.exports = { generateLeadId, buildExternalId, parseCSV };
