@@ -42,7 +42,15 @@ app.post('/api/receive-lead', async (req, res) => {
       lead_id: leadId, phone, name: payload.name, loan_amount: payload.loan_amount,
       branch_id: payload.branch_id || null, city: payload.city || null, pincode: pincode || null,
       loan_type: payload.loan_type, lead_source: payload.lead_source, external_id: externalId,
+      assigned_source: payload.assigned_source || null,
     };
+
+    // Per lead_source + assigned_source (affiliate/client) config, set from
+    // the Source Config tab: whether to send WhatsApp and what priority
+    // score to send OneStop. Falls back to send=true / priority=9.9.
+    const sourceConfig = await db.getSourceConfig(baseLead.lead_source, baseLead.assigned_source);
+    const priorityScore = sourceConfig?.priority_score != null ? Number(sourceConfig.priority_score) : 9.9;
+    const sendWhatsapp = sourceConfig ? sourceConfig.send_whatsapp !== false : true;
 
     // ── Agent resolution ──────────────────────────────────────
     // `assigned_agent` (email) in the payload still force-assigns, bypassing
@@ -85,11 +93,7 @@ app.post('/api/receive-lead', async (req, res) => {
       console.log('[receiveLead] Round robin picked ' + agent.agent_email + ' for pin ' + pincode);
     }
 
-    // ── Build lead object ─────────────────────────────────────
-    // Change: pass assigned_source so onestop.js can use it as leadSource
-    const lead = { ...baseLead, assigned_source: payload.assigned_source || null };
-
-    const assignResult = await onestop.assignLead(lead, agent);
+    const assignResult = await onestop.assignLead(baseLead, agent, priorityScore);
 
     await db.insertLead({
       ...baseLead,
@@ -102,9 +106,13 @@ app.post('/api/receive-lead', async (req, res) => {
       'Assigned to ' + agent.agent_name + ' (' + agent.agent_email + ') pin:' + (pincode || '-') +
       ' rotation#' + agent.assign_count + ' mode:' + mode, 'SUCCESS');
 
-    // Change: pass payload.template_id as override (may be undefined/null — that's fine)
-    const waResult = await whatsapp.sendWhatsAppToAgent(agent.agent_phone, lead, agent, false, payload.template_id || null);
-    await db.updateLeadWhatsapp(leadId, 'p0', waResult.success ? 'Sent' : 'Failed');
+    // send_whatsapp = false on the matching source config skips the message entirely.
+    let waResult = { success: false, message: 'Skipped by source config' };
+    if (sendWhatsapp) {
+      // Change: pass payload.template_id as override (may be undefined/null — that's fine)
+      waResult = await whatsapp.sendWhatsAppToAgent(agent.agent_phone, baseLead, agent, false, payload.template_id || null);
+    }
+    await db.updateLeadWhatsapp(leadId, 'p0', !sendWhatsapp ? 'Skipped' : (waResult.success ? 'Sent' : 'Failed'));
 
     return res.json({
       code: 200, message: 'Lead processed',
@@ -147,9 +155,14 @@ app.post('/api/check-reassignment', async (req, res) => {
           continue;
         }
         await onestop.updateAssignment(lead.onestop_lead_id || lead.external_id || lead.lead_id, nextAgent);
-        const waResult = await whatsapp.sendWhatsAppToAgent(nextAgent.agent_phone, lead, nextAgent, true);
+        const reassignSourceConfig = await db.getSourceConfig(lead.lead_source, lead.assigned_source);
+        const reassignSendWhatsapp = reassignSourceConfig ? reassignSourceConfig.send_whatsapp !== false : true;
+        let waResult = { success: false, message: 'Skipped by source config' };
+        if (reassignSendWhatsapp) {
+          waResult = await whatsapp.sendWhatsAppToAgent(nextAgent.agent_phone, lead, nextAgent, true);
+        }
         await db.reassignLead(lead.lead_id, nextAgent);
-        await db.updateLeadWhatsapp(lead.lead_id, 'p1', waResult.success ? 'Sent' : 'Failed');
+        await db.updateLeadWhatsapp(lead.lead_id, 'p1', !reassignSendWhatsapp ? 'Skipped' : (waResult.success ? 'Sent' : 'Failed'));
         await db.appendLog('REASSIGN', lead.lead_id, lead.phone, lead.assigned_name + ' -> ' + nextAgent.agent_name, 'SUCCESS');
         results.reassigned++;
       } catch (err) {
@@ -253,11 +266,21 @@ app.get('/api/source-config', async (_, res) => {
 
 app.post('/api/source-config', async (req, res) => {
   try {
-    const { lead_source, assign_by } = req.body;
+    const { lead_source, assigned_source, assign_by, send_whatsapp, priority_score } = req.body;
     if (!lead_source || !['branch_id', 'city', 'pincode'].includes(assign_by)) {
       return res.status(400).json({ code: 400, message: 'Invalid lead_source or assign_by' });
     }
-    return res.json({ code: 200, data: await db.upsertSourceConfig(lead_source, assign_by) });
+    const priorityScore = priority_score != null && priority_score !== '' ? parseFloat(priority_score) : 9.9;
+    if (Number.isNaN(priorityScore)) {
+      return res.status(400).json({ code: 400, message: 'priority_score must be a number' });
+    }
+    return res.json({
+      code: 200,
+      data: await db.upsertSourceConfig({
+        lead_source, assigned_source: assigned_source || '', assign_by,
+        send_whatsapp: send_whatsapp !== false, priority_score: priorityScore,
+      }),
+    });
   } catch (e) { return res.status(500).json({ code: 500, message: e.message }); }
 });
 

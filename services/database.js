@@ -123,16 +123,17 @@ async function insertLead(data) {
     `INSERT INTO leads
        (lead_id, phone, name, loan_amount, branch_id, city, pincode, loan_type, lead_source,
         assigned_agent_id, assigned_email, assigned_name, assigned_phone, assigned_priority,
-        assigned_at, lead_status, onestop_lead_id, activity_checked, whatsapp_p0_status, external_id)
+        assigned_at, lead_status, onestop_lead_id, activity_checked, whatsapp_p0_status, external_id,
+        assigned_source)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
         CASE WHEN $10::int IS NULL THEN NULL ELSE NOW() END, $15, $16,
         CASE WHEN $10::int IS NULL THEN true ELSE false END,
-        CASE WHEN $10::int IS NULL THEN 'Skipped' ELSE 'Pending' END, $17)
+        CASE WHEN $10::int IS NULL THEN 'Skipped' ELSE 'Pending' END, $17, $18)
      RETURNING *`,
     [data.lead_id, data.phone, data.name, data.loan_amount, data.branch_id, data.city,
      data.pincode, data.loan_type, data.lead_source, data.agent_id || null, data.agent_email || null,
      data.agent_name || null, data.agent_phone || null, data.agent_priority || null,
-     status, data.onestop_lead_id || null, data.external_id || null]
+     status, data.onestop_lead_id || null, data.external_id || null, data.assigned_source || null]
   );
   return rows[0];
 }
@@ -275,14 +276,35 @@ async function bulkReplaceAgents(rows) {
 // ─── Lead Source Config CRUD ───────────────────────────────
 
 async function getAllSourceConfigs() {
-  const { rows } = await pool.query('SELECT * FROM lead_source_config ORDER BY lead_source');
+  const { rows } = await pool.query('SELECT * FROM lead_source_config ORDER BY lead_source, assigned_source');
   return rows;
 }
 
-async function upsertSourceConfig(leadSource, assignBy) {
+/**
+ * Look up the WhatsApp/priority config for a lead_source + assigned_source
+ * (affiliate/client) pair. Prefers an exact match, falls back to the
+ * wildcard row for the lead_source (assigned_source = ''), else null.
+ */
+async function getSourceConfig(leadSource, assignedSource) {
   const { rows } = await pool.query(
-    "INSERT INTO lead_source_config (lead_source, assign_by) VALUES ($1, $2) ON CONFLICT (lead_source) DO UPDATE SET assign_by = $2, updated_at = NOW() RETURNING *",
-    [leadSource, assignBy]
+    `SELECT * FROM lead_source_config
+     WHERE lead_source = $1 AND assigned_source IN ($2, '') AND is_active = true
+     ORDER BY (assigned_source = $2) DESC
+     LIMIT 1`,
+    [leadSource, assignedSource || '']
+  );
+  return rows[0] || null;
+}
+
+async function upsertSourceConfig(data) {
+  const { rows } = await pool.query(
+    `INSERT INTO lead_source_config (lead_source, assigned_source, assign_by, send_whatsapp, priority_score)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (lead_source, assigned_source) DO UPDATE SET
+       assign_by = $3, send_whatsapp = $4, priority_score = $5, updated_at = NOW()
+     RETURNING *`,
+    [data.lead_source, data.assigned_source || '', data.assign_by || 'branch_id',
+     data.send_whatsapp !== false, data.priority_score != null ? data.priority_score : 9.9]
   );
   return rows[0];
 }
@@ -381,7 +403,7 @@ module.exports = {
   markLeadActive, reassignLead, markLeadNoAgent,
   appendLog, getRecentLogs, getDashboardStats,
   getAllAgents, addAgent, updateAgent, deleteAgent, deleteAgents, bulkReplaceAgents,
-  getAllSourceConfigs, upsertSourceConfig, deleteSourceConfig,
+  getAllSourceConfigs, getSourceConfig, upsertSourceConfig, deleteSourceConfig,
   getAllWhatsappTemplateConfigs, getWhatsappTemplateConfig, upsertWhatsappTemplateConfig, deleteWhatsappTemplateConfig,
   getAllSystemConfigs, getSystemConfig, setSystemConfig, bulkSetSystemConfig,
 };

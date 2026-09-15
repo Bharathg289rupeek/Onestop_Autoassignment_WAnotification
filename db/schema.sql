@@ -124,9 +124,63 @@ CREATE TABLE IF NOT EXISTS logs (
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS last_assigned_at TIMESTAMPTZ;
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS assign_count INTEGER NOT NULL DEFAULT 0;
 
+-- Older deployments created leads.assigned_agent_id / reassigned_agent_id
+-- without ON DELETE SET NULL, so deleting an agent still referenced by a
+-- lead fails with a foreign key violation. Recreate those constraints with
+-- the correct behavior (idempotent — only touches them if not already 'n').
+DO $$
+DECLARE
+  del_action "char";
+BEGIN
+  SELECT confdeltype INTO del_action FROM pg_constraint
+    WHERE conname = 'leads_assigned_agent_id_fkey' AND conrelid = 'leads'::regclass;
+  IF FOUND AND del_action <> 'n' THEN
+    ALTER TABLE leads DROP CONSTRAINT leads_assigned_agent_id_fkey;
+    ALTER TABLE leads ADD CONSTRAINT leads_assigned_agent_id_fkey
+      FOREIGN KEY (assigned_agent_id) REFERENCES agents(id) ON UPDATE CASCADE ON DELETE SET NULL;
+  END IF;
+
+  SELECT confdeltype INTO del_action FROM pg_constraint
+    WHERE conname = 'leads_reassigned_agent_id_fkey' AND conrelid = 'leads'::regclass;
+  IF FOUND AND del_action <> 'n' THEN
+    ALTER TABLE leads DROP CONSTRAINT leads_reassigned_agent_id_fkey;
+    ALTER TABLE leads ADD CONSTRAINT leads_reassigned_agent_id_fkey
+      FOREIGN KEY (reassigned_agent_id) REFERENCES agents(id) ON UPDATE CASCADE ON DELETE SET NULL;
+  END IF;
+END $$;
+
 -- ── External lead ID (lead_source_assigned_source_date_phone) ──
 -- Sent to WhatsApp (CTA link) and OneStop (leadID) instead of lead_id.
 ALTER TABLE leads ADD COLUMN IF NOT EXISTS external_id VARCHAR(150);
+
+-- Persist the affiliate/client (assigned_source) so it survives to the
+-- reassignment (P1) flow and can be matched against lead_source_config below.
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS assigned_source VARCHAR(100);
+
+-- ── Per lead_source + affiliate/client config (WhatsApp send + priority) ──
+-- assigned_source = '' is the wildcard row for "any affiliate of this source".
+ALTER TABLE lead_source_config ADD COLUMN IF NOT EXISTS assigned_source VARCHAR(100) NOT NULL DEFAULT '';
+ALTER TABLE lead_source_config ADD COLUMN IF NOT EXISTS send_whatsapp BOOLEAN NOT NULL DEFAULT true;
+ALTER TABLE lead_source_config ADD COLUMN IF NOT EXISTS priority_score NUMERIC(4,1) NOT NULL DEFAULT 9.9;
+
+-- lead_source used to be unique on its own; now the pair (lead_source,
+-- assigned_source) is the key, so one lead_source can have both a wildcard
+-- row and per-affiliate overrides.
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'lead_source_config'::regclass AND conname = 'lead_source_config_lead_source_key'
+  ) THEN
+    ALTER TABLE lead_source_config DROP CONSTRAINT lead_source_config_lead_source_key;
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'lead_source_config'::regclass AND conname = 'lead_source_config_source_pair_key'
+  ) THEN
+    ALTER TABLE lead_source_config ADD CONSTRAINT lead_source_config_source_pair_key UNIQUE (lead_source, assigned_source);
+  END IF;
+END $$;
 
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_agents_branch    ON agents(branch_id, priority);

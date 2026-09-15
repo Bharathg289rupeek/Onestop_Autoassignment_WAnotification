@@ -13,7 +13,7 @@ onestopClient.interceptors.request.use((req) => {
   return req;
 });
 
-async function assignLead(lead, agent) {
+async function assignLead(lead, agent, priorityScore) {
   try {
     // Change 1: use assigned_source from payload if provided, else lead_source, else 'Qualified'
     const leadSource = lead.assigned_source || lead.lead_source || 'Qualified';
@@ -25,7 +25,7 @@ async function assignLead(lead, agent) {
       firstname: lead.name, phone: String(lead.phone),
       leadSource: leadSource,
       loanAmount: parseFloat(lead.loan_amount), loanType: parseInt(lead.loan_type) || 2,
-      priorityScore: 9.9, stage: 'New', state: 'New', status: 'Open',
+      priorityScore: priorityScore != null ? priorityScore : 9.9, stage: 'New', state: 'New', status: 'Open',
       leadID: lead.external_id || lead.lead_id, submitDay: new Date().toISOString(),
     };
     const response = await onestopClient.post('/meetingBubbleLeadsV2', payload);

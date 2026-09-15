@@ -159,13 +159,13 @@ function getDashboardHTML(baseUrl) {
   <!-- Source Config -->
   <div class="tab-panel" id="panel-sourceConfig">
     <div class="info-box">
-      <strong>Note:</strong> assignment now runs on <strong>pincode round robin for every source</strong>, so <code>assign_by</code> below is no longer used for matching. This tab is kept so existing rows stay visible; it will be replaced by the per-source assign / priority / WhatsApp controls.
+      Configure <strong>WhatsApp sending</strong> and <strong>OneStop priority</strong> per lead source, optionally narrowed to one affiliate/client. Leave <strong>Affiliate/Client</strong> blank to make the row a fallback for every affiliate of that lead source; a row with a specific affiliate takes precedence over the blank one. <code>assign_by</code> is no longer used for agent matching (assignment runs on pincode round robin for every source) — kept for reference only.
     </div>
     <div class="toolbar">
       <button class="btn btn-primary" onclick="openSourceModal()">+ Add Source Config</button>
     </div>
     <div class="tbl-wrap"><table><thead><tr>
-      <th>Lead Source</th><th>Assign By</th><th>Active</th><th>Actions</th>
+      <th>Lead Source</th><th>Affiliate/Client</th><th>Send WhatsApp</th><th>Priority</th><th>Assign By</th><th>Active</th><th>Actions</th>
     </tr></thead><tbody id="sourceBody"></tbody></table></div>
   </div>
 
@@ -246,11 +246,21 @@ function getDashboardHTML(baseUrl) {
   </div>
 </div>
 
-<!-- Modal: Add Source Config -->
+<!-- Modal: Add/Edit Source Config -->
 <div class="modal-overlay hidden" id="sourceModal">
   <div class="modal">
-    <h2>Add Lead Source Config</h2>
-    <div class="form-group"><label>Lead Source Name *</label><input id="fSource" placeholder="e.g. chakra, website, partner"></div>
+    <h2 id="sourceModalTitle">Add Lead Source Config</h2>
+    <input type="hidden" id="fSourceId">
+    <div class="form-row">
+      <div class="form-group"><label>Lead Source Name *</label><input id="fSource" placeholder="e.g. chakra, website, partner"></div>
+      <div class="form-group"><label>Affiliate/Client</label><input id="fAssignedSource" placeholder="leave blank = all affiliates"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Send WhatsApp</label>
+        <select id="fSendWhatsapp"><option value="true">Yes</option><option value="false">No</option></select>
+      </div>
+      <div class="form-group"><label>Priority (sent to OneStop) *</label><input id="fPriorityScore" type="number" step="0.1" min="0" max="10" value="9.9"></div>
+    </div>
     <div class="form-group"><label>Assign By *</label>
       <select id="fAssignBy">
         <option value="branch_id">branch_id — match by branch</option>
@@ -550,30 +560,57 @@ function loadSourceConfigs() {
   }).catch(function(e) { console.error('loadSourceConfigs', e); });
 }
 
+var editingSourceId = null;
+
 function renderSourceConfigs() {
   var b = document.getElementById('sourceBody');
-  if (!allSources.length) { b.innerHTML = '<tr><td colspan="4" style="padding:20px;color:var(--text2)">No source configs. All sources default to branch_id.</td></tr>'; return; }
+  if (!allSources.length) { b.innerHTML = '<tr><td colspan="7" style="padding:20px;color:var(--text2)">No source configs. All sources default to send=Yes, priority=9.9.</td></tr>'; return; }
   b.innerHTML = allSources.map(function(s) {
     return '<tr>' +
       '<td>' + esc(s.lead_source) + '</td>' +
+      '<td>' + (s.assigned_source ? esc(s.assigned_source) : '<span style="color:var(--text2)">— all —</span>') + '</td>' +
+      '<td><span class="badge ' + (s.send_whatsapp ? 'b-active' : 'b-failed') + '">' + (s.send_whatsapp ? 'Yes' : 'No') + '</span></td>' +
+      '<td style="text-align:center;font-family:JetBrains Mono,monospace">' + esc(s.priority_score) + '</td>' +
       '<td><span class="badge b-assigned">' + esc(s.assign_by) + '</span></td>' +
       '<td><span class="badge ' + (s.is_active ? 'b-active' : 'b-failed') + '">' + (s.is_active ? 'Yes' : 'No') + '</span></td>' +
-      '<td><button class="btn btn-sm btn-danger" onclick="delSource(' + s.id + ')">Delete</button></td></tr>';
+      '<td>' +
+        '<button class="btn btn-sm" style="margin-right:4px" onclick="editSourceConfig(' + s.id + ')">Edit</button>' +
+        '<button class="btn btn-sm btn-danger" onclick="delSource(' + s.id + ')">Delete</button>' +
+      '</td></tr>';
   }).join('');
 }
 
-function openSourceModal() {
-  document.getElementById('fSource').value = '';
+function openSourceModal(s) {
+  editingSourceId = s ? s.id : null;
+  document.getElementById('sourceModalTitle').textContent = s ? 'Edit Lead Source Config' : 'Add Lead Source Config';
+  document.getElementById('fSourceId').value = s ? s.id : '';
+  document.getElementById('fSource').value = s ? s.lead_source : '';
+  document.getElementById('fAssignedSource').value = s ? (s.assigned_source || '') : '';
+  document.getElementById('fSendWhatsapp').value = s && s.send_whatsapp === false ? 'false' : 'true';
+  document.getElementById('fPriorityScore').value = s && s.priority_score != null ? s.priority_score : 9.9;
+  document.getElementById('fAssignBy').value = s ? s.assign_by : 'branch_id';
   document.getElementById('sourceModal').classList.remove('hidden');
+}
+
+function editSourceConfig(id) {
+  var s = allSources.find(function(x) { return x.id === id; });
+  if (s) openSourceModal(s);
 }
 
 function saveSourceConfig() {
   var btn = document.getElementById('btnSaveSource');
   var lead_source = document.getElementById('fSource').value.trim();
+  var assigned_source = document.getElementById('fAssignedSource').value.trim();
   var assign_by = document.getElementById('fAssignBy').value;
+  var send_whatsapp = document.getElementById('fSendWhatsapp').value === 'true';
+  var priority_score = parseFloat(document.getElementById('fPriorityScore').value);
   if (!lead_source) return toast('Lead source name is required', 'error');
+  if (isNaN(priority_score)) return toast('Priority must be a number', 'error');
   btn.disabled = true;
-  fetch(API + '/source-config', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ lead_source, assign_by }) })
+  fetch(API + '/source-config', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ lead_source, assigned_source, assign_by, send_whatsapp, priority_score }),
+  })
     .then(function(r) { return r.json(); }).then(function(j) {
       btn.disabled = false;
       if (j.code === 200) { toast('Source config saved'); closeModal('sourceModal'); loadSourceConfigs(); }
