@@ -98,7 +98,7 @@ app.post('/api/receive-lead', async (req, res) => {
     await db.insertLead({
       ...baseLead,
       agent_id: agent.id, agent_email: agent.agent_email, agent_name: agent.agent_name,
-      agent_phone: agent.agent_phone, agent_priority: agent.priority,
+      agent_phone: agent.agent_phone,
       onestop_lead_id: assignResult.data?.leadId || '',
     });
 
@@ -116,7 +116,7 @@ app.post('/api/receive-lead', async (req, res) => {
 
     return res.json({
       code: 200, message: 'Lead processed',
-      data: { lead_id: leadId, assigned: true, assigned_to: agent.agent_email, priority: agent.priority, pincode: pincode || null, mode },
+      data: { lead_id: leadId, assigned: true, assigned_to: agent.agent_email, pincode: pincode || null, mode },
     });
   } catch (err) {
     console.error('[receiveLead] Error:', err);
@@ -226,13 +226,13 @@ app.post('/api/agents/upload-csv', upload.single('file'), async (req, res) => {
     const rows = parseCSV(csvText);
     if (rows.length === 0) return res.status(400).json({ code: 400, message: 'CSV is empty or has no data rows' });
     const first = rows[0];
-    const requiredCols = ['branch_id', 'agent_email', 'agent_name', 'agent_phone', 'priority'];
+    const requiredCols = ['branch_id', 'agent_email', 'agent_name', 'agent_phone'];
     const missingCols = requiredCols.filter(c => !(c in first));
     if (missingCols.length > 0) {
       return res.status(400).json({
         code: 400,
         message: 'CSV missing columns: ' + missingCols.join(', '),
-        hint: 'Required: branch_id, agent_email, agent_name, agent_phone, priority. Optional: city, pincode, city_identifier, pincode_identifier',
+        hint: 'Required: branch_id, agent_email, agent_name, agent_phone. Optional: city, pincode, city_identifier, pincode_identifier',
       });
     }
     const result = await db.bulkReplaceAgents(rows);
@@ -244,7 +244,7 @@ app.post('/api/agents/upload-csv', upload.single('file'), async (req, res) => {
 app.get('/api/agents/download-csv', async (_, res) => {
   try {
     const agents = await db.getAllAgents();
-    const headers = ['branch_id','agent_email','agent_name','agent_phone','city','pincode','priority','city_identifier','pincode_identifier'];
+    const headers = ['branch_id','agent_email','agent_name','agent_phone','city','pincode','city_identifier','pincode_identifier'];
     const lines = [headers.join(',')];
     for (const a of agents) {
       lines.push(headers.map(h => {

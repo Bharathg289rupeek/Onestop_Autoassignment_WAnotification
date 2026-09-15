@@ -222,22 +222,22 @@ async function getDashboardStats() {
 // ─── Agent CRUD ────────────────────────────────────────────
 
 async function getAllAgents() {
-  const { rows } = await pool.query('SELECT * FROM agents ORDER BY branch_id, priority');
+  const { rows } = await pool.query('SELECT * FROM agents ORDER BY branch_id, id');
   return rows;
 }
 
 async function addAgent(data) {
   const { rows } = await pool.query(
-    'INSERT INTO agents (branch_id, agent_email, agent_name, agent_phone, city, pincode, priority, city_identifier, pincode_identifier) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *',
-    [data.branch_id, data.agent_email, data.agent_name, data.agent_phone, data.city || null, data.pincode || null, parseInt(data.priority) || 1, data.city_identifier || 'assign', data.pincode_identifier || 'assign']
+    'INSERT INTO agents (branch_id, agent_email, agent_name, agent_phone, city, pincode, city_identifier, pincode_identifier) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *',
+    [data.branch_id, data.agent_email, data.agent_name, data.agent_phone, data.city || null, data.pincode || null, data.city_identifier || 'assign', data.pincode_identifier || 'assign']
   );
   return rows[0];
 }
 
 async function updateAgent(id, data) {
   const { rows } = await pool.query(
-    'UPDATE agents SET branch_id=$1, agent_email=$2, agent_name=$3, agent_phone=$4, city=$5, pincode=$6, priority=$7, city_identifier=$8, pincode_identifier=$9, is_active=$10, updated_at=NOW() WHERE id=$11 RETURNING *',
-    [data.branch_id, data.agent_email, data.agent_name, data.agent_phone, data.city || null, data.pincode || null, parseInt(data.priority) || 1, data.city_identifier || 'assign', data.pincode_identifier || 'assign', data.is_active !== false && data.is_active !== 'false', id]
+    'UPDATE agents SET branch_id=$1, agent_email=$2, agent_name=$3, agent_phone=$4, city=$5, pincode=$6, city_identifier=$7, pincode_identifier=$8, is_active=$9, updated_at=NOW() WHERE id=$10 RETURNING *',
+    [data.branch_id, data.agent_email, data.agent_name, data.agent_phone, data.city || null, data.pincode || null, data.city_identifier || 'assign', data.pincode_identifier || 'assign', data.is_active !== false && data.is_active !== 'false', id]
   );
   return rows[0];
 }
@@ -259,8 +259,8 @@ async function bulkReplaceAgents(rows) {
     let inserted = 0;
     for (const r of rows) {
       await client.query(
-        'INSERT INTO agents (branch_id, agent_email, agent_name, agent_phone, city, pincode, priority, city_identifier, pincode_identifier) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
-        [r.branch_id, r.agent_email, r.agent_name, r.agent_phone, r.city || null, r.pincode || null, parseInt(r.priority) || 1, r.city_identifier || 'assign', r.pincode_identifier || 'assign']
+        'INSERT INTO agents (branch_id, agent_email, agent_name, agent_phone, city, pincode, city_identifier, pincode_identifier) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
+        [r.branch_id, r.agent_email, r.agent_name, r.agent_phone, r.city || null, r.pincode || null, r.city_identifier || 'assign', r.pincode_identifier || 'assign']
       );
       inserted++;
     }

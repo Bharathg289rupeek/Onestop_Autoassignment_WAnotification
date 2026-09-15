@@ -79,12 +79,12 @@ one assignable agent, there is no backup and the lead is marked
 
 Agents:
 
-| email | pincode | priority | pin_id | active |
-|---|---|---|---|---|
-| a@x.com | 560001 | 1 | assign | yes |
-| b@x.com | 560001 | 2 | assign | yes |
-| d@x.com | 560001 | 1 | dont assign | yes |
-| f@x.com | 570001 | 1 | assign | yes |
+| email | pincode | pin_id | active |
+|---|---|---|---|
+| a@x.com | 560001 | assign | yes |
+| b@x.com | 560001 | assign | yes |
+| d@x.com | 560001 | dont assign | yes |
+| f@x.com | 570001 | assign | yes |
 
 Incoming leads:
 
@@ -199,10 +199,10 @@ REASSIGN_DELAY_MINUTES=10
 
 **CSV format:**
 ```csv
-branch_id,agent_email,agent_name,agent_phone,city,pincode,priority,city_identifier,pincode_identifier
-BR001,bharath.3647@rupeek.com,Dhruv,9380720423,bangalore,574224,1,assign,assign
-BR001,ganesh.shivaji@rupeek.com,Bharath,9380720423,bangalore,574224,2,assign,dont assign
-BR001,bharath.3647@rupeek.com,Backup Agent,9380720423,bangalore,574224,3,dont assign,dont assign
+branch_id,agent_email,agent_name,agent_phone,city,pincode,city_identifier,pincode_identifier
+BR001,bharath.3647@rupeek.com,Dhruv,9380720423,bangalore,574224,assign,assign
+BR001,ganesh.shivaji@rupeek.com,Bharath,9380720423,bangalore,574224,assign,dont assign
+BR001,bharath.3647@rupeek.com,Backup Agent,9380720423,bangalore,574224,dont assign,dont assign
 ```
 
 > **Every CSV upload replaces ALL existing agents.** This is by design — the CSV is the single source of truth.

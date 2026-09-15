@@ -147,12 +147,12 @@ function getDashboardHTML(baseUrl) {
       <input class="search-input" id="agentSearch" placeholder="Search agents..." oninput="renderAgents()">
     </div>
     <div class="info-box">
-      <strong>Assignment is pincode-only, round robin.</strong> An agent takes leads only if <code>pincode</code> is set, <code>pincode_identifier = assign</code>, and Active = Yes. Within a pincode the least-recently-assigned agent goes next, so load spreads evenly. <code>branch_id</code> / <code>city</code> are stored for reference but no longer affect assignment.<br>
-      <strong>CSV format:</strong> <code>branch_id, agent_email, agent_name, agent_phone, priority</code> (required) + <code>city, pincode, city_identifier, pincode_identifier</code> (optional). Upload replaces <strong>all</strong> agents and resets the rotation.
+      <strong>Assignment is pincode-only, round robin.</strong> An agent takes leads only if <code>pincode</code> is set, <code>pincode_identifier = assign</code>, and Active = Yes. Within a pincode the least-recently-assigned agent goes next, so load spreads evenly — there is no priority ordering. <code>branch_id</code> / <code>city</code> are stored for reference but no longer affect assignment.<br>
+      <strong>CSV format:</strong> <code>branch_id, agent_email, agent_name, agent_phone</code> (required) + <code>city, pincode, city_identifier, pincode_identifier</code> (optional). Upload replaces <strong>all</strong> agents and resets the rotation.
     </div>
     <div class="tbl-wrap"><table><thead><tr>
       <th><input type="checkbox" id="agentSelectAll" onchange="toggleAllAgents(this.checked)"></th>
-      <th>Pincode</th><th>Pin ID</th><th>Email</th><th>Name</th><th>Phone</th><th>Branch</th><th>City</th><th>Priority</th><th>Assigned #</th><th>Last Assigned</th><th>Active</th><th>Actions</th>
+      <th>Pincode</th><th>Pin ID</th><th>Email</th><th>Name</th><th>Phone</th><th>Branch</th><th>City</th><th>Assigned #</th><th>Last Assigned</th><th>Active</th><th>Actions</th>
     </tr></thead><tbody id="agentsBody"></tbody></table></div>
   </div>
 
@@ -214,10 +214,7 @@ function getDashboardHTML(baseUrl) {
   <div class="modal">
     <h2 id="agentModalTitle">Add Agent</h2>
     <input type="hidden" id="fAgentId">
-    <div class="form-row">
-      <div class="form-group"><label>Branch ID *</label><input id="fBranchId" placeholder="BR001"></div>
-      <div class="form-group"><label>Priority *</label><input id="fPriority" type="number" min="1" value="1"></div>
-    </div>
+    <div class="form-group"><label>Branch ID *</label><input id="fBranchId" placeholder="BR001"></div>
     <div class="form-group"><label>Agent Email *</label><input id="fEmail" placeholder="agent@company.com"></div>
     <div class="form-row">
       <div class="form-group"><label>Agent Name *</label><input id="fName" placeholder="Full Name"></div>
@@ -403,7 +400,7 @@ function renderAgents() {
   var rows = allAgents.filter(function(a) { return !q || JSON.stringify(a).toLowerCase().includes(q); });
   visibleAgentIds = rows.map(function(a) { return a.id; });
   var b = document.getElementById('agentsBody');
-  if (!rows.length) { b.innerHTML = '<tr><td colspan="13" style="padding:20px;color:var(--text2)">No agents.</td></tr>'; updateBulkDeleteButton(); syncSelectAllCheckbox(); return; }
+  if (!rows.length) { b.innerHTML = '<tr><td colspan="12" style="padding:20px;color:var(--text2)">No agents.</td></tr>'; updateBulkDeleteButton(); syncSelectAllCheckbox(); return; }
   b.innerHTML = rows.map(function(a) {
     var inRotation = a.is_active && a.pincode_identifier === 'assign' && a.pincode;
     return '<tr>' +
@@ -415,7 +412,6 @@ function renderAgents() {
       '<td>' + esc(a.agent_phone) + '</td>' +
       '<td>' + esc(a.branch_id) + '</td>' +
       '<td>' + esc(a.city||'—') + '</td>' +
-      '<td style="text-align:center">' + esc(a.priority) + '</td>' +
       '<td style="text-align:center;font-family:JetBrains Mono,monospace">' + esc(a.assign_count==null?0:a.assign_count) + '</td>' +
       '<td style="font-size:11px;color:var(--text2)">' + fmtDate(a.last_assigned_at) + '</td>' +
       '<td><span class="badge ' + (a.is_active?'b-active':'b-failed') + '">' + (a.is_active?'Yes':'No') + '</span></td>' +
@@ -486,7 +482,6 @@ function openAgentModal(agent) {
   document.getElementById('fPhone').value = agent ? agent.agent_phone : '';
   document.getElementById('fCity').value = agent ? (agent.city||'') : '';
   document.getElementById('fPincode').value = agent ? (agent.pincode||'') : '';
-  document.getElementById('fPriority').value = agent ? agent.priority : 1;
   document.getElementById('fCityId').value = agent ? agent.city_identifier : 'assign';
   document.getElementById('fPincodeId').value = agent ? agent.pincode_identifier : 'assign';
   document.getElementById('fActiveGroup').style.display = agent ? 'block' : 'none';
@@ -508,7 +503,6 @@ function saveAgent() {
     agent_phone: document.getElementById('fPhone').value.trim(),
     city: document.getElementById('fCity').value.trim(),
     pincode: document.getElementById('fPincode').value.trim(),
-    priority: parseInt(document.getElementById('fPriority').value) || 1,
     city_identifier: document.getElementById('fCityId').value,
     pincode_identifier: document.getElementById('fPincodeId').value,
     is_active: document.getElementById('fIsActive').value !== 'false',
