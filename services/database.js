@@ -244,6 +244,11 @@ async function deleteAgent(id) {
   await pool.query('DELETE FROM agents WHERE id = $1', [id]);
 }
 
+async function deleteAgents(ids) {
+  const { rowCount } = await pool.query('DELETE FROM agents WHERE id = ANY($1::int[])', [ids]);
+  return rowCount;
+}
+
 async function bulkReplaceAgents(rows) {
   const client = await pool.connect();
   try {
@@ -375,7 +380,7 @@ module.exports = {
   insertLead, updateLeadWhatsapp, getLeadsPendingReassignment,
   markLeadActive, reassignLead, markLeadNoAgent,
   appendLog, getRecentLogs, getDashboardStats,
-  getAllAgents, addAgent, updateAgent, deleteAgent, bulkReplaceAgents,
+  getAllAgents, addAgent, updateAgent, deleteAgent, deleteAgents, bulkReplaceAgents,
   getAllSourceConfigs, upsertSourceConfig, deleteSourceConfig,
   getAllWhatsappTemplateConfigs, getWhatsappTemplateConfig, upsertWhatsappTemplateConfig, deleteWhatsappTemplateConfig,
   getAllSystemConfigs, getSystemConfig, setSystemConfig, bulkSetSystemConfig,

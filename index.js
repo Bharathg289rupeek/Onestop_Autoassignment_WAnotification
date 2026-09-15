@@ -197,6 +197,15 @@ app.delete('/api/agents/:id', async (req, res) => {
   catch (e) { return res.status(500).json({ code: 500, message: e.message }); }
 });
 
+app.post('/api/agents/bulk-delete', async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.map(Number).filter(Number.isInteger) : [];
+    if (!ids.length) return res.status(400).json({ code: 400, message: 'ids must be a non-empty array' });
+    const deleted = await db.deleteAgents(ids);
+    return res.json({ code: 200, message: 'Deleted ' + deleted + ' agent(s)', data: { deleted } });
+  } catch (e) { return res.status(500).json({ code: 500, message: e.message }); }
+});
+
 app.post('/api/agents/upload-csv', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ code: 400, message: 'No file uploaded' });

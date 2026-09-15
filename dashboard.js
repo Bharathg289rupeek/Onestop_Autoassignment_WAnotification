@@ -143,6 +143,7 @@ function getDashboardHTML(baseUrl) {
         &#8593; Upload CSV
         <input type="file" accept=".csv" id="csvFileInput" style="display:none" onchange="uploadCSV(this)">
       </label>
+      <button class="btn btn-danger" id="btnBulkDeleteAgents" onclick="bulkDeleteAgents()" disabled>Delete Selected (0)</button>
       <input class="search-input" id="agentSearch" placeholder="Search agents..." oninput="renderAgents()">
     </div>
     <div class="info-box">
@@ -150,6 +151,7 @@ function getDashboardHTML(baseUrl) {
       <strong>CSV format:</strong> <code>branch_id, agent_email, agent_name, agent_phone, priority</code> (required) + <code>city, pincode, city_identifier, pincode_identifier</code> (optional). Upload replaces <strong>all</strong> agents and resets the rotation.
     </div>
     <div class="tbl-wrap"><table><thead><tr>
+      <th><input type="checkbox" id="agentSelectAll" onchange="toggleAllAgents(this.checked)"></th>
       <th>Pincode</th><th>Pin ID</th><th>Email</th><th>Name</th><th>Phone</th><th>Branch</th><th>City</th><th>Priority</th><th>Assigned #</th><th>Last Assigned</th><th>Active</th><th>Actions</th>
     </tr></thead><tbody id="agentsBody"></tbody></table></div>
   </div>
@@ -383,14 +385,19 @@ function loadAgents() {
   }).catch(function(e) { console.error('loadAgents', e); });
 }
 
+var selectedAgentIds = new Set();
+var visibleAgentIds = [];
+
 function renderAgents() {
   var q = (document.getElementById('agentSearch').value || '').toLowerCase();
   var rows = allAgents.filter(function(a) { return !q || JSON.stringify(a).toLowerCase().includes(q); });
+  visibleAgentIds = rows.map(function(a) { return a.id; });
   var b = document.getElementById('agentsBody');
-  if (!rows.length) { b.innerHTML = '<tr><td colspan="12" style="padding:20px;color:var(--text2)">No agents.</td></tr>'; return; }
+  if (!rows.length) { b.innerHTML = '<tr><td colspan="13" style="padding:20px;color:var(--text2)">No agents.</td></tr>'; updateBulkDeleteButton(); syncSelectAllCheckbox(); return; }
   b.innerHTML = rows.map(function(a) {
     var inRotation = a.is_active && a.pincode_identifier === 'assign' && a.pincode;
     return '<tr>' +
+      '<td><input type="checkbox" class="agent-check" ' + (selectedAgentIds.has(a.id)?'checked':'') + ' onchange="toggleAgentSelect(' + a.id + ', this.checked)"></td>' +
       '<td><strong>' + esc(a.pincode||'—') + '</strong></td>' +
       '<td><span class="badge ' + (a.pincode_identifier==='assign'?'b-active':'b-failed') + '">' + esc(a.pincode_identifier) + '</span></td>' +
       '<td style="font-size:12px">' + esc(a.agent_email) + '</td>' +
@@ -407,6 +414,56 @@ function renderAgents() {
         '<button class="btn btn-sm btn-danger" onclick="delAgent(' + a.id + ')">Delete</button>' +
       '</td></tr>';
   }).join('');
+  updateBulkDeleteButton();
+  syncSelectAllCheckbox();
+}
+
+function toggleAgentSelect(id, checked) {
+  if (checked) selectedAgentIds.add(id); else selectedAgentIds.delete(id);
+  updateBulkDeleteButton();
+  syncSelectAllCheckbox();
+}
+
+function toggleAllAgents(checked) {
+  visibleAgentIds.forEach(function(id) {
+    if (checked) selectedAgentIds.add(id); else selectedAgentIds.delete(id);
+  });
+  renderAgents();
+}
+
+function syncSelectAllCheckbox() {
+  var cb = document.getElementById('agentSelectAll');
+  if (!cb) return;
+  var allSelected = visibleAgentIds.length > 0 && visibleAgentIds.every(function(id) { return selectedAgentIds.has(id); });
+  cb.checked = allSelected;
+  cb.indeterminate = !allSelected && visibleAgentIds.some(function(id) { return selectedAgentIds.has(id); });
+}
+
+function updateBulkDeleteButton() {
+  var btn = document.getElementById('btnBulkDeleteAgents');
+  if (!btn) return;
+  btn.disabled = selectedAgentIds.size === 0;
+  btn.textContent = 'Delete Selected (' + selectedAgentIds.size + ')';
+}
+
+function bulkDeleteAgents() {
+  var ids = Array.from(selectedAgentIds);
+  if (!ids.length) return;
+  if (!confirm('Delete ' + ids.length + ' selected agent(s)? This cannot be undone.')) return;
+  var btn = document.getElementById('btnBulkDeleteAgents');
+  btn.disabled = true;
+  fetch(API + '/agents/bulk-delete', {
+    method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({ ids: ids })
+  }).then(function(r) { return r.json(); }).then(function(j) {
+    if (j.code === 200) {
+      toast('Deleted ' + ids.length + ' agent(s)');
+      selectedAgentIds.clear();
+      loadAgents();
+    } else {
+      toast(j.message || 'Error', 'error');
+      btn.disabled = false;
+    }
+  }).catch(function(e) { toast(e.message, 'error'); btn.disabled = false; });
 }
 
 function openAgentModal(agent) {
@@ -463,7 +520,7 @@ function saveAgent() {
 function delAgent(id) {
   if (!confirm('Delete this agent?')) return;
   fetch(API + '/agents/' + id, { method: 'DELETE' }).then(function(r) { return r.json(); }).then(function(j) {
-    if (j.code === 200) { toast('Deleted'); loadAgents(); }
+    if (j.code === 200) { selectedAgentIds.delete(id); toast('Deleted'); loadAgents(); }
     else toast(j.message || 'Error', 'error');
   });
 }
