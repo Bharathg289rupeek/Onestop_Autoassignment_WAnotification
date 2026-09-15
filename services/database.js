@@ -1,30 +1,100 @@
 const { pool } = require('../db');
 
-// ─── Agent Assignment Logic ─────────────────────────────────
+// ─── Agent Assignment Logic — PINCODE ONLY, ROUND ROBIN ─────
+//
+// Rules:
+//   1. Leads are matched to agents by pincode and nothing else.
+//   2. No pincode on the lead        -> do not assign.
+//   3. No assignable agent in pincode -> do not assign.
+//   4. Among the agents in that pincode, rotate round robin
+//      (least-recently-assigned goes next).
+//
+// "Assignable" = is_active AND pincode_identifier = 'assign'.
+// branch_id / city are stored for reference but never drive assignment.
 
-async function getAssignMethod(leadSource) {
-  if (!leadSource) return 'branch_id';
-  const { rows } = await pool.query(
-    'SELECT assign_by FROM lead_source_config WHERE lead_source = $1 AND is_active = true',
-    [leadSource]
-  );
-  return rows[0]?.assign_by || 'branch_id';
+function normalizePincode(pin) {
+  if (pin === null || pin === undefined) return '';
+  return String(pin).trim();
 }
 
-async function findAgent(lead, mode) {
-  let query, params;
-  if (mode === 'city') {
-    query = "SELECT * FROM agents WHERE LOWER(city) = LOWER($1) AND city_identifier = 'assign' AND is_active = true ORDER BY priority ASC LIMIT 1";
-    params = [lead.city];
-  } else if (mode === 'pincode') {
-    query = "SELECT * FROM agents WHERE pincode = $1 AND pincode_identifier = 'assign' AND is_active = true ORDER BY priority ASC LIMIT 1";
-    params = [lead.pincode];
-  } else {
-    query = 'SELECT * FROM agents WHERE branch_id = $1 AND is_active = true ORDER BY priority ASC LIMIT 1';
-    params = [lead.branch_id];
+/**
+ * Atomically pick and claim the next agent in the pincode rotation.
+ *
+ * Concurrency: a transaction-scoped advisory lock keyed on the pincode
+ * serialises claims *within* one pincode while leaving different pincodes to
+ * run in parallel. The lock is held only for one SELECT + one UPDATE.
+ *
+ * (An earlier version used FOR UPDATE SKIP LOCKED in a single statement. That
+ * is wrong here: when several leads for the same pincode land at once, every
+ * candidate row can be locked, the select returns nothing, and the lead is
+ * misreported as "no agent in pincode" and silently dropped. Waiting on the
+ * advisory lock instead means a burst is queued rather than discarded.)
+ *
+ * Rotation order: least-recently-assigned first. Agents never assigned (NULL)
+ * come first, so a newly added agent joins the rotation immediately. priority
+ * assign_count, priority then id break ties deterministically.
+ *
+ * @param {string} pincode              lead pincode
+ * @param {number|null} excludeAgentId  skip this agent (used on reassignment)
+ * @returns {object|null} agent row, or null if nobody is assignable
+ */
+async function claimAgentByPincode(pincode, excludeAgentId) {
+  const pin = normalizePincode(pincode);
+  if (!pin) return null;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Serialise the rotation for this pincode only.
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['rr:' + pin]);
+
+    const { rows } = await client.query(
+      `SELECT id FROM agents
+        WHERE TRIM(pincode) = $1
+          AND pincode_identifier = 'assign'
+          AND is_active = true
+          AND ($2::int IS NULL OR id <> $2::int)
+        ORDER BY last_assigned_at ASC NULLS FIRST, assign_count ASC, priority ASC, id ASC
+        LIMIT 1`,
+      [pin, excludeAgentId || null]
+    );
+
+    if (!rows.length) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+
+    const claimed = await client.query(
+      // clock_timestamp() (not NOW()) — NOW() is the transaction start time, so
+      // simultaneous claims would stamp identical values and the rotation would
+      // keep tie-breaking onto the same agent.
+      `UPDATE agents
+          SET last_assigned_at = clock_timestamp(),
+              assign_count     = assign_count + 1,
+              updated_at       = NOW()
+        WHERE id = $1
+      RETURNING *`,
+      [rows[0].id]
+    );
+    await client.query('COMMIT');
+    return claimed.rows[0] || null;
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    throw err;
+  } finally {
+    client.release();
   }
-  const { rows } = await pool.query(query, params);
-  return rows[0] || null;
+}
+
+/** How many agents are assignable in this pincode (for clearer error messages). */
+async function countAssignableAgents(pincode) {
+  const pin = normalizePincode(pincode);
+  if (!pin) return 0;
+  const { rows } = await pool.query(
+    "SELECT COUNT(*)::int AS n FROM agents WHERE TRIM(pincode) = $1 AND pincode_identifier = 'assign' AND is_active = true",
+    [pin]
+  );
+  return rows[0].n;
 }
 
 // Find a specific agent by email (for forced assignment via assigned_agent field)
@@ -36,28 +106,33 @@ async function findAgentByEmail(email) {
   return rows[0] || null;
 }
 
-async function findNextAgent(lead, mode, currentPriority) {
-  let query, params;
-  if (mode === 'city') {
-    query = "SELECT * FROM agents WHERE LOWER(city) = LOWER($1) AND city_identifier = 'assign' AND is_active = true AND priority > $2 ORDER BY priority ASC LIMIT 1";
-    params = [lead.city, currentPriority];
-  } else if (mode === 'pincode') {
-    query = "SELECT * FROM agents WHERE pincode = $1 AND pincode_identifier = 'assign' AND is_active = true AND priority > $2 ORDER BY priority ASC LIMIT 1";
-    params = [lead.pincode, currentPriority];
-  } else {
-    query = 'SELECT * FROM agents WHERE branch_id = $1 AND is_active = true AND priority > $2 ORDER BY priority ASC LIMIT 1';
-    params = [lead.branch_id, currentPriority];
-  }
-  const { rows } = await pool.query(query, params);
-  return rows[0] || null;
+/** Next agent in the pincode rotation for a reassignment, excluding the current one. */
+async function findNextAgent(lead, currentAgentId) {
+  return claimAgentByPincode(lead.pincode, currentAgentId);
 }
 
 // ─── Lead Operations ───────────────────────────────────────
 
 async function insertLead(data) {
+  // An unassigned lead is still recorded, so that "why didn't this get
+  // assigned?" is answerable from the dashboard instead of only the logs.
+  const isAssigned = !!data.agent_id;
+  const status = data.lead_status || (isAssigned ? 'Assigned' : 'Unassigned');
+
   const { rows } = await pool.query(
-    "INSERT INTO leads (lead_id, phone, name, loan_amount, branch_id, city, pincode, loan_type, lead_source, assigned_agent_id, assigned_email, assigned_name, assigned_phone, assigned_priority, assigned_at, lead_status, onestop_lead_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NOW(),'Assigned',$15) RETURNING *",
-    [data.lead_id, data.phone, data.name, data.loan_amount, data.branch_id, data.city, data.pincode, data.loan_type, data.lead_source, data.agent_id, data.agent_email, data.agent_name, data.agent_phone, data.agent_priority, data.onestop_lead_id]
+    `INSERT INTO leads
+       (lead_id, phone, name, loan_amount, branch_id, city, pincode, loan_type, lead_source,
+        assigned_agent_id, assigned_email, assigned_name, assigned_phone, assigned_priority,
+        assigned_at, lead_status, onestop_lead_id, activity_checked, whatsapp_p0_status)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
+        CASE WHEN $10::int IS NULL THEN NULL ELSE NOW() END, $15, $16,
+        CASE WHEN $10::int IS NULL THEN true ELSE false END,
+        CASE WHEN $10::int IS NULL THEN 'Skipped' ELSE 'Pending' END)
+     RETURNING *`,
+    [data.lead_id, data.phone, data.name, data.loan_amount, data.branch_id, data.city,
+     data.pincode, data.loan_type, data.lead_source, data.agent_id || null, data.agent_email || null,
+     data.agent_name || null, data.agent_phone || null, data.agent_priority || null,
+     status, data.onestop_lead_id || null]
   );
   return rows[0];
 }
@@ -69,7 +144,7 @@ async function updateLeadWhatsapp(leadId, field, status) {
 
 async function getLeadsPendingReassignment(delayMinutes) {
   const { rows } = await pool.query(
-    "SELECT l.*, lsc.assign_by FROM leads l LEFT JOIN lead_source_config lsc ON lsc.lead_source = l.lead_source AND lsc.is_active = true WHERE l.lead_status = 'Assigned' AND l.activity_checked = false AND l.reassigned = false AND l.assigned_at < NOW() - INTERVAL '1 minute' * $1 ORDER BY l.assigned_at ASC",
+    "SELECT l.* FROM leads l WHERE l.lead_status = 'Assigned' AND l.activity_checked = false AND l.reassigned = false AND l.assigned_agent_id IS NOT NULL AND l.assigned_at < NOW() - INTERVAL '1 minute' * $1 ORDER BY l.assigned_at ASC",
     [delayMinutes]
   );
   return rows;
@@ -126,9 +201,10 @@ async function getDashboardStats() {
   const { rows: leads } = await Promise.race([queryPromise, timeoutPromise]);
   console.log('[getDashboardStats] Query returned', leads.length, 'rows in', (Date.now() - startTime) + 'ms');
 
-  let total = 0, assigned = 0, reassignedCount = 0, active = 0, waSent = 0, waFailed = 0;
+  let total = 0, assigned = 0, reassignedCount = 0, active = 0, waSent = 0, waFailed = 0, unassigned = 0;
   for (const l of leads) {
     total++;
+    if (l.assigned_agent_id == null) unassigned++;
     if (l.lead_status === 'Assigned') assigned++;
     if (l.lead_status === 'Active') active++;
     if (l.reassigned === true) reassignedCount++;
@@ -138,7 +214,7 @@ async function getDashboardStats() {
     if (l.whatsapp_p1_status === 'Failed') waFailed++;
   }
 
-  return { total, assigned, reassigned: reassignedCount, active, whatsappSent: waSent, whatsappFailed: waFailed, leads };
+  return { total, assigned, unassigned, reassigned: reassignedCount, active, whatsappSent: waSent, whatsappFailed: waFailed, leads };
 }
 
 // ─── Agent CRUD ────────────────────────────────────────────
@@ -295,7 +371,7 @@ async function bulkSetSystemConfig(entries) {
 }
 
 module.exports = {
-  getAssignMethod, findAgent, findAgentByEmail, findNextAgent,
+  claimAgentByPincode, countAssignableAgents, findAgentByEmail, findNextAgent, normalizePincode,
   insertLead, updateLeadWhatsapp, getLeadsPendingReassignment,
   markLeadActive, reassignLead, markLeadNoAgent,
   appendLog, getRecentLogs, getDashboardStats,

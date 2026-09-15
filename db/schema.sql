@@ -118,8 +118,14 @@ CREATE TABLE IF NOT EXISTS logs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- ── Round-robin tracking (added for pincode-only assignment) ──
+-- Safe to re-run: these are no-ops once the columns exist.
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS last_assigned_at TIMESTAMPTZ;
+ALTER TABLE agents ADD COLUMN IF NOT EXISTS assign_count INTEGER NOT NULL DEFAULT 0;
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_agents_branch    ON agents(branch_id, priority);
+CREATE INDEX IF NOT EXISTS idx_agents_rr        ON agents(pincode, pincode_identifier, is_active, last_assigned_at);
 CREATE INDEX IF NOT EXISTS idx_agents_city      ON agents(city, city_identifier);
 CREATE INDEX IF NOT EXISTS idx_agents_pincode   ON agents(pincode, pincode_identifier);
 CREATE INDEX IF NOT EXISTS idx_agents_email     ON agents(agent_email);

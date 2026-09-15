@@ -7,46 +7,105 @@
 | 3 separate Cloud Functions | Single Express server |
 | Google Sheets as DB | PostgreSQL |
 | Agent table: branch_id + priority only | Agent table: branch_id, city, pincode, priority, city_identifier, pincode_identifier |
-| Assignment always by branch_id | Assignment configurable per lead_source |
+| Assignment always by branch_id | Assignment always by pincode, round robin |
 | No CSV upload | CSV upload replaces all agents |
 | Cloud Scheduler | Railway cron or external cron |
 
 ---
 
-## Assignment Logic
+## Assignment Logic — Pincode Only, Round Robin
 
-Each **lead_source** can be configured (via dashboard) to assign leads differently:
+Assignment is driven by **pincode and nothing else**. `branch_id` and `city` are
+still stored on the lead and the agent for reference, but they no longer affect
+who gets the lead.
 
-| Mode | Matching | Filtering | Ordering |
-|---|---|---|---|
-| `branch_id` (default) | Agent's `branch_id` = Lead's `branch_id` | All active agents | Lowest `priority` first |
-| `city` | Agent's `city` = Lead's `city` | Only `city_identifier = 'assign'` | Lowest `priority` first |
-| `pincode` | Agent's `pincode` = Lead's `pincode` | Only `pincode_identifier = 'assign'` | Lowest `priority` first |
+### The rules
 
-**Reassignment** uses the same mode but picks the next-higher priority number agent.
+1. **No pincode on the lead → do not assign.**
+2. **No assignable agent in that pincode → do not assign.**
+3. Otherwise, pick the next agent in that pincode's **round-robin rotation**.
+
+An agent is *assignable* for a pincode when all three hold:
+
+| Condition | Column |
+|---|---|
+| Pincode matches the lead (whitespace-trimmed) | `pincode` |
+| Agent opted in to pincode assignment | `pincode_identifier = 'assign'` |
+| Agent is active | `is_active = true` |
+
+### How the rotation works
+
+Each agent carries `last_assigned_at` and `assign_count`. The next lead goes to
+the **least-recently-assigned** assignable agent in the pincode; ties break on
+`assign_count`, then `priority`, then `id`.
+
+- Load spreads evenly instead of always hitting the P1 agent.
+- A newly added agent has `last_assigned_at = NULL`, so they sort first and join
+  the rotation immediately.
+- Deactivating an agent or flipping them to `dont assign` drops them out with no
+  other change needed.
+- `priority` is now only a tiebreaker, not the selector.
+
+Claims are serialised per pincode with a Postgres transaction-scoped advisory
+lock, so a burst of simultaneous webhooks for the same pincode is queued rather
+than double-booking one agent or being wrongly reported as "no agent".
+
+### Unassigned leads are still recorded
+
+A lead that cannot be assigned is **saved anyway** with a status explaining why,
+so it shows up in the dashboard instead of vanishing into the logs:
+
+| Situation | `lead_status` | Response `reason` |
+|---|---|---|
+| Lead had no pincode | `Unassigned - No Pincode` | `NO_PINCODE` |
+| Nobody assignable in that pincode | `Unassigned - No Agent In Pincode` | `NO_AGENT_IN_PINCODE` |
+
+These rows get `whatsapp_p0_status = 'Skipped'` and `activity_checked = true`, so
+the reassignment cron leaves them alone. The webhook returns HTTP **200** with
+`data.assigned = false` (it previously returned 422 and stored nothing) — a lead
+that simply has no agent is not a caller error, and returning 200 stops upstream
+systems from retrying it forever.
+
+### Reassignment
+
+Unchanged in timing, but it now stays **inside the same pincode**: after
+`REASSIGN_DELAY_MINUTES` with no call activity, the lead moves to the next agent
+in that pincode's rotation, skipping the current one. If that pincode has only
+one assignable agent, there is no backup and the lead is marked
+`No Backup Agent`.
 
 ### Example
 
-Agents table:
+Agents:
 
-| branch_id | email | name | priority | city | pincode | city_id | pin_id |
-|---|---|---|---|---|---|---|---|
-| BR001 | bharath@rupeek.com | Dhruv | 1 | bangalore | 574224 | assign | assign |
-| BR001 | ganesh@rupeek.com | Bharath | 2 | bangalore | 574224 | assign | dont assign |
-| BR001 | backup@rupeek.com | Backup | 3 | bangalore | 574224 | dont assign | dont assign |
+| email | pincode | priority | pin_id | active |
+|---|---|---|---|---|
+| a@x.com | 560001 | 1 | assign | yes |
+| b@x.com | 560001 | 2 | assign | yes |
+| d@x.com | 560001 | 1 | dont assign | yes |
+| f@x.com | 570001 | 1 | assign | yes |
 
-Source config:
+Incoming leads:
 
-| lead_source | assign_by |
+| lead pincode | result |
 |---|---|
-| chakra | branch_id |
-| website | city |
-| partner | pincode |
+| 560001 | a@x.com |
+| 560001 | b@x.com |
+| 560001 | a@x.com (rotation wraps; `d` never participates) |
+| 570001 | f@x.com |
+| *(blank)* | **not assigned** — `NO_PINCODE` |
+| 999999 | **not assigned** — `NO_AGENT_IN_PINCODE` |
 
-Results:
-- **chakra lead** (branch_id=BR001): Dhruv(P1) → Bharath(P2) → Backup(P3)
-- **website lead** (city=bangalore): Dhruv(P1) → Bharath(P2). Backup skipped (city_id=dont assign)
-- **partner lead** (pincode=574224): Dhruv(P1) only. Others skipped (pin_id=dont assign)
+### Note on `lead_source_config`
+
+The `assign_by` setting (`branch_id` / `city` / `pincode`) is **no longer used
+for matching** — every source now assigns by pincode. The table and its
+dashboard tab are kept so existing rows remain visible.
+
+### Forced assignment
+
+Passing `assigned_agent` (an agent email) in the webhook payload still bypasses
+the rotation and assigns directly to that agent.
 
 ---
 
@@ -203,13 +262,17 @@ Payload:
   "phone": "9876543210",
   "name": "Customer Name",
   "loan_amount": 500000,
-  "branch_id": "BR001",
   "loan_type": "2",
   "lead_source": "chakra",
-  "city": "bangalore",
-  "pincode": "574224"
+  "pincode": "574224",
+  "branch_id": "BR001",
+  "city": "bangalore"
 }
 ```
+
+Required: `phone`, `name`, `loan_amount`, `loan_type`. **`branch_id` is no longer
+required.** `pincode` is what decides assignment — without it the lead is
+recorded but never assigned.
 
 ---
 

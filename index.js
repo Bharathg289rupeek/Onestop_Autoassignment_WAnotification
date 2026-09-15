@@ -23,22 +23,32 @@ app.get('/health', (_, res) => res.json({ status: 'ok', time: new Date().toISOSt
 app.post('/api/receive-lead', async (req, res) => {
   try {
     const payload = req.body;
-    const required = ['phone', 'name', 'loan_amount', 'branch_id', 'loan_type'];
+    // branch_id is no longer required — assignment is driven by pincode only.
+    const required = ['phone', 'name', 'loan_amount', 'loan_type'];
     const missing = required.filter(f => !payload[f]);
     if (missing.length) return res.status(400).json({ code: 400, message: 'Missing: ' + missing.join(', ') });
 
     const leadId = payload.lead_id || generateLeadId();
     const phone = String(payload.phone).trim();
+    const pincode = db.normalizePincode(payload.pincode);
 
-    console.log('[receiveLead] Processing ' + leadId + ' branch=' + payload.branch_id + ' source=' + payload.lead_source);
+    console.log('[receiveLead] Processing ' + leadId + ' pin=' + (pincode || 'NONE') + ' source=' + payload.lead_source);
+
+    // Common fields for recording the lead whether or not it gets assigned.
+    const baseLead = {
+      lead_id: leadId, phone, name: payload.name, loan_amount: payload.loan_amount,
+      branch_id: payload.branch_id || null, city: payload.city || null, pincode: pincode || null,
+      loan_type: payload.loan_type, lead_source: payload.lead_source,
+    };
 
     // ── Agent resolution ──────────────────────────────────────
-    // Change: if `assigned_agent` (email) is in payload, force-assign to that agent.
-    // Otherwise use normal branch/city/pincode logic.
-    let agent;
-    let mode = 'forced';
+    // `assigned_agent` (email) in the payload still force-assigns, bypassing
+    // the pincode rotation. Everything else goes through pincode round robin.
+    let agent = null;
+    let mode = 'pincode_round_robin';
 
     if (payload.assigned_agent) {
+      mode = 'forced';
       agent = await db.findAgentByEmail(payload.assigned_agent);
       if (!agent) {
         await db.appendLog('ERROR', leadId, phone, 'assigned_agent not found: ' + payload.assigned_agent, 'FAILED');
@@ -46,37 +56,48 @@ app.post('/api/receive-lead', async (req, res) => {
       }
       console.log('[receiveLead] Forced agent: ' + agent.agent_email);
     } else {
-      mode = await db.getAssignMethod(payload.lead_source);
-      agent = await db.findAgent({ branch_id: payload.branch_id, city: payload.city, pincode: payload.pincode }, mode);
-      if (!agent) {
-        await db.appendLog('ERROR', leadId, phone, 'No agent found (mode=' + mode + ', branch=' + payload.branch_id + ', city=' + payload.city + ', pin=' + payload.pincode + ')', 'FAILED');
-        return res.status(422).json({ code: 422, message: 'No agent configured (mode: ' + mode + ')' });
+      // RULE 1: no pincode on the lead -> do not assign.
+      if (!pincode) {
+        await db.insertLead({ ...baseLead, lead_status: 'Unassigned - No Pincode' });
+        await db.appendLog('NOT_ASSIGNED', leadId, phone, 'Lead has no pincode — not assigned', 'FAILED');
+        return res.status(200).json({
+          code: 200, message: 'Lead recorded but not assigned — no pincode',
+          data: { lead_id: leadId, assigned: false, reason: 'NO_PINCODE' },
+        });
       }
-      console.log('[receiveLead] Mode: ' + mode);
+
+      // RULE 2 + 3: assignable agent in that pincode, picked round robin.
+      agent = await db.claimAgentByPincode(pincode, null);
+      if (!agent) {
+        const n = await db.countAssignableAgents(pincode);
+        const reason = n === 0 ? 'NO_AGENT_IN_PINCODE' : 'ALL_AGENTS_BUSY';
+        await db.insertLead({ ...baseLead, lead_status: 'Unassigned - No Agent In Pincode' });
+        await db.appendLog('NOT_ASSIGNED', leadId, phone,
+          'No assignable agent for pincode ' + pincode + ' (' + reason + ')', 'FAILED');
+        return res.status(200).json({
+          code: 200, message: 'Lead recorded but not assigned — no agent in pincode ' + pincode,
+          data: { lead_id: leadId, assigned: false, reason, pincode },
+        });
+      }
+      console.log('[receiveLead] Round robin picked ' + agent.agent_email + ' for pin ' + pincode);
     }
 
     // ── Build lead object ─────────────────────────────────────
     // Change: pass assigned_source so onestop.js can use it as leadSource
-    const lead = {
-      lead_id: leadId, phone, name: payload.name, loan_amount: payload.loan_amount,
-      loan_type: payload.loan_type, branch_id: payload.branch_id,
-      city: payload.city, pincode: payload.pincode, lead_source: payload.lead_source,
-      assigned_source: payload.assigned_source || null,
-    };
+    const lead = { ...baseLead, assigned_source: payload.assigned_source || null };
 
     const assignResult = await onestop.assignLead(lead, agent);
 
     await db.insertLead({
-      lead_id: leadId, phone, name: payload.name, loan_amount: payload.loan_amount,
-      branch_id: payload.branch_id, city: payload.city, pincode: payload.pincode,
-      loan_type: payload.loan_type, lead_source: payload.lead_source,
+      ...baseLead,
       agent_id: agent.id, agent_email: agent.agent_email, agent_name: agent.agent_name,
       agent_phone: agent.agent_phone, agent_priority: agent.priority,
       onestop_lead_id: assignResult.data?.leadId || '',
     });
 
     await db.appendLog('ASSIGN', leadId, phone,
-      'Assigned to ' + agent.agent_name + ' (' + agent.agent_email + ') P' + agent.priority + ' mode:' + mode, 'SUCCESS');
+      'Assigned to ' + agent.agent_name + ' (' + agent.agent_email + ') pin:' + (pincode || '-') +
+      ' rotation#' + agent.assign_count + ' mode:' + mode, 'SUCCESS');
 
     // Change: pass payload.template_id as override (may be undefined/null — that's fine)
     const waResult = await whatsapp.sendWhatsAppToAgent(agent.agent_phone, lead, agent, false, payload.template_id || null);
@@ -84,7 +105,7 @@ app.post('/api/receive-lead', async (req, res) => {
 
     return res.json({
       code: 200, message: 'Lead processed',
-      data: { lead_id: leadId, assigned_to: agent.agent_email, priority: agent.priority, mode },
+      data: { lead_id: leadId, assigned: true, assigned_to: agent.agent_email, priority: agent.priority, pincode: pincode || null, mode },
     });
   } catch (err) {
     console.error('[receiveLead] Error:', err);
@@ -112,11 +133,13 @@ app.post('/api/check-reassignment', async (req, res) => {
           results.active++;
           continue;
         }
-        const mode = lead.assign_by || 'branch_id';
-        const nextAgent = await db.findNextAgent(lead, mode, lead.assigned_priority);
+        // Reassignment stays inside the same pincode: hand the lead to the
+        // next agent in that pincode's rotation, skipping the current one.
+        const nextAgent = await db.findNextAgent(lead, lead.assigned_agent_id);
         if (!nextAgent) {
           await db.markLeadNoAgent(lead.lead_id);
-          await db.appendLog('ERROR', lead.lead_id, lead.phone, 'No backup agent (mode=' + mode + ')', 'FAILED');
+          await db.appendLog('ERROR', lead.lead_id, lead.phone,
+            'No backup agent in pincode ' + (lead.pincode || '-'), 'FAILED');
           results.errors++;
           continue;
         }

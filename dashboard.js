@@ -107,6 +107,7 @@ function getDashboardHTML(baseUrl) {
   <div class="stats">
     <div class="stat c-accent"><div class="n" id="sTotal">&mdash;</div><div class="l">Total Leads</div></div>
     <div class="stat c-blue"><div class="n" id="sAssigned">&mdash;</div><div class="l">Assigned</div></div>
+    <div class="stat c-red"><div class="n" id="sUnassigned">&mdash;</div><div class="l">Unassigned</div></div>
     <div class="stat c-amber"><div class="n" id="sReassigned">&mdash;</div><div class="l">Reassigned</div></div>
     <div class="stat c-green"><div class="n" id="sActive">&mdash;</div><div class="l">Active</div></div>
     <div class="stat c-green"><div class="n" id="sWASent">&mdash;</div><div class="l">WA Sent</div></div>
@@ -128,7 +129,7 @@ function getDashboardHTML(baseUrl) {
       <input class="search-input" id="leadSearch" placeholder="Search leads..." oninput="renderLeads()">
     </div>
     <div class="tbl-wrap"><table><thead><tr>
-      <th>Lead ID</th><th>Phone</th><th>Name</th><th>Amount</th><th>Branch</th><th>Source</th>
+      <th>Lead ID</th><th>Phone</th><th>Name</th><th>Amount</th><th>Pincode</th><th>Source</th>
       <th>Assigned To</th><th>Status</th><th>WA P0</th><th>WA P1</th><th>Assigned At</th>
     </tr></thead><tbody id="leadsBody"><tr><td colspan="11" style="text-align:center;padding:30px;color:var(--text2)">Loading...</td></tr></tbody></table></div>
   </div>
@@ -145,17 +146,18 @@ function getDashboardHTML(baseUrl) {
       <input class="search-input" id="agentSearch" placeholder="Search agents..." oninput="renderAgents()">
     </div>
     <div class="info-box">
-      <strong>CSV format:</strong> <code>branch_id, agent_email, agent_name, agent_phone, priority</code> (required) + <code>city, pincode, city_identifier, pincode_identifier</code> (optional). Upload replaces <strong>all</strong> agents.
+      <strong>Assignment is pincode-only, round robin.</strong> An agent takes leads only if <code>pincode</code> is set, <code>pincode_identifier = assign</code>, and Active = Yes. Within a pincode the least-recently-assigned agent goes next, so load spreads evenly. <code>branch_id</code> / <code>city</code> are stored for reference but no longer affect assignment.<br>
+      <strong>CSV format:</strong> <code>branch_id, agent_email, agent_name, agent_phone, priority</code> (required) + <code>city, pincode, city_identifier, pincode_identifier</code> (optional). Upload replaces <strong>all</strong> agents and resets the rotation.
     </div>
     <div class="tbl-wrap"><table><thead><tr>
-      <th>Branch</th><th>Email</th><th>Name</th><th>Phone</th><th>City</th><th>Pincode</th><th>Priority</th><th>City ID</th><th>Pin ID</th><th>Active</th><th>Actions</th>
+      <th>Pincode</th><th>Pin ID</th><th>Email</th><th>Name</th><th>Phone</th><th>Branch</th><th>City</th><th>Priority</th><th>Assigned #</th><th>Last Assigned</th><th>Active</th><th>Actions</th>
     </tr></thead><tbody id="agentsBody"></tbody></table></div>
   </div>
 
   <!-- Source Config -->
   <div class="tab-panel" id="panel-sourceConfig">
     <div class="info-box">
-      Configure how leads are assigned per source. <strong>branch_id</strong> (default) — match by branch. <strong>city</strong> — match by city, only agents with <code>city_identifier=assign</code>. <strong>pincode</strong> — match by pincode, only agents with <code>pincode_identifier=assign</code>.
+      <strong>Note:</strong> assignment now runs on <strong>pincode round robin for every source</strong>, so <code>assign_by</code> below is no longer used for matching. This tab is kept so existing rows stay visible; it will be replaced by the per-source assign / priority / WhatsApp controls.
     </div>
     <div class="toolbar">
       <button class="btn btn-primary" onclick="openSourceModal()">+ Add Source Config</button>
@@ -338,6 +340,7 @@ function loadStats() {
     var d = j.data;
     document.getElementById('sTotal').textContent = d.total;
     document.getElementById('sAssigned').textContent = d.assigned;
+    document.getElementById('sUnassigned').textContent = d.unassigned;
     document.getElementById('sReassigned').textContent = d.reassigned;
     document.getElementById('sActive').textContent = d.active;
     document.getElementById('sWASent').textContent = d.whatsappSent;
@@ -356,15 +359,15 @@ function renderLeads() {
   var b = document.getElementById('leadsBody');
   if (!rows.length) { b.innerHTML = '<tr><td colspan="11" style="text-align:center;padding:30px;color:var(--text2)">No leads found.</td></tr>'; return; }
   b.innerHTML = rows.map(function(l) {
-    var statusClass = l.lead_status === 'Assigned' ? 'b-assigned' : l.lead_status === 'Reassigned' ? 'b-reassigned' : l.lead_status === 'Active' ? 'b-active' : 'b-pending';
+    var statusClass = l.lead_status === 'Assigned' ? 'b-assigned' : l.lead_status === 'Reassigned' ? 'b-reassigned' : l.lead_status === 'Active' ? 'b-active' : (l.lead_status||'').indexOf('Unassigned') === 0 ? 'b-failed' : 'b-pending';
     var p0c = l.whatsapp_p0_status === 'Sent' ? 'b-sent' : l.whatsapp_p0_status === 'Failed' ? 'b-failed' : 'b-pending';
     var p1c = l.whatsapp_p1_status === 'Sent' ? 'b-sent' : l.whatsapp_p1_status === 'Failed' ? 'b-failed' : 'b-pending';
     return '<tr>' +
       '<td style="font-family:JetBrains Mono,monospace;font-size:11px">' + esc(l.lead_id) + '</td>' +
       '<td>' + esc(l.phone) + '</td><td>' + esc(l.name) + '</td>' +
       '<td>&#8377;' + Number(l.loan_amount||0).toLocaleString('en-IN') + '</td>' +
-      '<td>' + esc(l.branch_id) + '</td><td>' + esc(l.lead_source) + '</td>' +
-      '<td style="font-size:12px">' + esc(l.assigned_name) + '<br><span style="color:var(--text2);font-size:11px">' + esc(l.assigned_email) + '</span></td>' +
+      '<td>' + esc(l.pincode||'—') + '</td><td>' + esc(l.lead_source) + '</td>' +
+      '<td style="font-size:12px">' + (l.assigned_email ? esc(l.assigned_name) + '<br><span style="color:var(--text2);font-size:11px">' + esc(l.assigned_email) + '</span>' : '<span style="color:var(--red)">not assigned</span>') + '</td>' +
       '<td><span class="badge ' + statusClass + '">' + esc(l.lead_status) + '</span></td>' +
       '<td><span class="badge ' + p0c + '">' + esc(l.whatsapp_p0_status||'—') + '</span></td>' +
       '<td>' + (l.whatsapp_p1_status ? '<span class="badge ' + p1c + '">' + esc(l.whatsapp_p1_status) + '</span>' : '—') + '</td>' +
@@ -384,18 +387,20 @@ function renderAgents() {
   var q = (document.getElementById('agentSearch').value || '').toLowerCase();
   var rows = allAgents.filter(function(a) { return !q || JSON.stringify(a).toLowerCase().includes(q); });
   var b = document.getElementById('agentsBody');
-  if (!rows.length) { b.innerHTML = '<tr><td colspan="11" style="padding:20px;color:var(--text2)">No agents.</td></tr>'; return; }
+  if (!rows.length) { b.innerHTML = '<tr><td colspan="12" style="padding:20px;color:var(--text2)">No agents.</td></tr>'; return; }
   b.innerHTML = rows.map(function(a) {
+    var inRotation = a.is_active && a.pincode_identifier === 'assign' && a.pincode;
     return '<tr>' +
-      '<td>' + esc(a.branch_id) + '</td>' +
-      '<td style="font-size:12px">' + esc(a.agent_email) + '</td>' +
-      '<td>' + esc(a.agent_name) + '</td>' +
-      '<td>' + esc(a.agent_phone) + '</td>' +
-      '<td>' + esc(a.city||'—') + '</td>' +
-      '<td>' + esc(a.pincode||'—') + '</td>' +
-      '<td style="text-align:center">' + esc(a.priority) + '</td>' +
-      '<td><span class="badge ' + (a.city_identifier==='assign'?'b-active':'b-failed') + '">' + esc(a.city_identifier) + '</span></td>' +
+      '<td><strong>' + esc(a.pincode||'—') + '</strong></td>' +
       '<td><span class="badge ' + (a.pincode_identifier==='assign'?'b-active':'b-failed') + '">' + esc(a.pincode_identifier) + '</span></td>' +
+      '<td style="font-size:12px">' + esc(a.agent_email) + '</td>' +
+      '<td>' + esc(a.agent_name) + (inRotation?'':'<br><span style="color:var(--red);font-size:10px">not in rotation</span>') + '</td>' +
+      '<td>' + esc(a.agent_phone) + '</td>' +
+      '<td>' + esc(a.branch_id) + '</td>' +
+      '<td>' + esc(a.city||'—') + '</td>' +
+      '<td style="text-align:center">' + esc(a.priority) + '</td>' +
+      '<td style="text-align:center;font-family:JetBrains Mono,monospace">' + esc(a.assign_count==null?0:a.assign_count) + '</td>' +
+      '<td style="font-size:11px;color:var(--text2)">' + fmtDate(a.last_assigned_at) + '</td>' +
       '<td><span class="badge ' + (a.is_active?'b-active':'b-failed') + '">' + (a.is_active?'Yes':'No') + '</span></td>' +
       '<td>' +
         '<button class="btn btn-sm" style="margin-right:4px" onclick="editAgent(' + a.id + ')">Edit</button>' +
