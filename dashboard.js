@@ -129,9 +129,9 @@ function getDashboardHTML(baseUrl) {
       <input class="search-input" id="leadSearch" placeholder="Search leads..." oninput="renderLeads()">
     </div>
     <div class="tbl-wrap"><table><thead><tr>
-      <th>Lead ID</th><th>Phone</th><th>Name</th><th>Amount</th><th>Pincode</th><th>Source</th>
+      <th>Lead ID</th><th>Phone</th><th>Name</th><th>Amount</th><th>Pincode</th><th>Source</th><th>Affiliate/Client</th>
       <th>Assigned To</th><th>Status</th><th>WA P0</th><th>WA P1</th><th>Assigned At</th>
-    </tr></thead><tbody id="leadsBody"><tr><td colspan="11" style="text-align:center;padding:30px;color:var(--text2)">Loading...</td></tr></tbody></table></div>
+    </tr></thead><tbody id="leadsBody"><tr><td colspan="12" style="text-align:center;padding:30px;color:var(--text2)">Loading...</td></tr></tbody></table></div>
   </div>
 
   <!-- Agents -->
@@ -366,7 +366,7 @@ function renderLeads() {
     return !q || JSON.stringify(l).toLowerCase().includes(q);
   });
   var b = document.getElementById('leadsBody');
-  if (!rows.length) { b.innerHTML = '<tr><td colspan="11" style="text-align:center;padding:30px;color:var(--text2)">No leads found.</td></tr>'; return; }
+  if (!rows.length) { b.innerHTML = '<tr><td colspan="12" style="text-align:center;padding:30px;color:var(--text2)">No leads found.</td></tr>'; return; }
   b.innerHTML = rows.map(function(l) {
     var statusClass = l.lead_status === 'Assigned' ? 'b-assigned' : l.lead_status === 'Reassigned' ? 'b-reassigned' : l.lead_status === 'Active' ? 'b-active' : (l.lead_status||'').indexOf('Unassigned') === 0 ? 'b-failed' : 'b-pending';
     var p0c = l.whatsapp_p0_status === 'Sent' ? 'b-sent' : l.whatsapp_p0_status === 'Failed' ? 'b-failed' : 'b-pending';
@@ -376,6 +376,7 @@ function renderLeads() {
       '<td>' + esc(l.phone) + '</td><td>' + esc(l.name) + '</td>' +
       '<td>&#8377;' + Number(l.loan_amount||0).toLocaleString('en-IN') + '</td>' +
       '<td>' + esc(l.pincode||'—') + '</td><td>' + esc(l.lead_source) + '</td>' +
+      '<td>' + (l.assigned_source ? esc(l.assigned_source) : '<span style="color:var(--text2)">—</span>') + '</td>' +
       '<td style="font-size:12px">' + (l.assigned_email ? esc(l.assigned_name) + '<br><span style="color:var(--text2);font-size:11px">' + esc(l.assigned_email) + '</span>' : '<span style="color:var(--red)">not assigned</span>') + '</td>' +
       '<td><span class="badge ' + statusClass + '">' + esc(l.lead_status) + '</span></td>' +
       '<td><span class="badge ' + p0c + '">' + esc(l.whatsapp_p0_status||'—') + '</span></td>' +
