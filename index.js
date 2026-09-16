@@ -47,10 +47,20 @@ app.post('/api/receive-lead', async (req, res) => {
 
     // Per lead_source + assigned_source (affiliate/client) config, set from
     // the Source Config tab: whether to send WhatsApp and what priority
-    // score to send OneStop. Falls back to send=true / priority=9.9.
+    // score to send OneStop. RULE 0: no matching row at all (not even the
+    // lead_source wildcard) -> do not assign until one is configured.
     const sourceConfig = await db.getSourceConfig(baseLead.lead_source, baseLead.assigned_source);
-    const priorityScore = sourceConfig?.priority_score != null ? Number(sourceConfig.priority_score) : 9.9;
-    const sendWhatsapp = sourceConfig ? sourceConfig.send_whatsapp !== false : true;
+    if (!sourceConfig) {
+      await db.insertLead({ ...baseLead, lead_status: 'Unassigned - No Source Config' });
+      await db.appendLog('NOT_ASSIGNED', leadId, phone,
+        'No Source Config for lead_source=' + baseLead.lead_source + ' assigned_source=' + (baseLead.assigned_source || '-') + ' — not assigned', 'FAILED');
+      return res.status(200).json({
+        code: 200, message: 'Lead recorded but not assigned — no Source Config for this lead_source/affiliate',
+        data: { lead_id: leadId, assigned: false, reason: 'NO_SOURCE_CONFIG' },
+      });
+    }
+    const priorityScore = Number(sourceConfig.priority_score);
+    const sendWhatsapp = sourceConfig.send_whatsapp !== false;
 
     // ── Agent resolution ──────────────────────────────────────
     // `assigned_agent` (email) in the payload still force-assigns, bypassing
