@@ -58,6 +58,8 @@ function getDashboardHTML(baseUrl) {
   .search-input { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); color:var(--text); padding:8px 14px; font-size:13px; width:300px; font-family:inherit; }
   .search-input:focus { outline:none; border-color:var(--accent); }
   .search-input::placeholder { color:var(--text2); }
+  .toolbar select { background:var(--surface); border:1px solid var(--border); border-radius:var(--radius); color:var(--text); padding:8px 10px; font-size:13px; font-family:inherit; }
+  .toolbar select:focus { outline:none; border-color:var(--accent); }
   .modal-overlay { position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,.6); z-index:100; display:flex; align-items:center; justify-content:center; }
   .modal { background:var(--surface); border:1px solid var(--border2); border-radius:12px; padding:24px; width:560px; max-width:95vw; max-height:90vh; overflow-y:auto; }
   .modal h2 { font-size:16px; font-weight:700; margin-bottom:16px; color:#fff; }
@@ -126,12 +128,14 @@ function getDashboardHTML(baseUrl) {
   <!-- Leads -->
   <div class="tab-panel active" id="panel-leads">
     <div class="toolbar">
+      <select id="leadSourceFilter" onchange="renderLeads()"><option value="">All Sources</option></select>
+      <select id="leadAffiliateFilter" onchange="renderLeads()"><option value="">All Affiliates/Clients</option></select>
       <input class="search-input" id="leadSearch" placeholder="Search leads..." oninput="renderLeads()">
     </div>
     <div class="tbl-wrap"><table><thead><tr>
-      <th>Lead ID</th><th>Phone</th><th>Name</th><th>Amount</th><th>Pincode</th><th>Source</th><th>Affiliate/Client</th>
+      <th>Lead ID</th><th>Received At</th><th>Phone</th><th>Name</th><th>Amount</th><th>Pincode</th><th>Source</th><th>Affiliate/Client</th>
       <th>Assigned To</th><th>Status</th><th>WA P0</th><th>WA P1</th><th>Assigned At</th>
-    </tr></thead><tbody id="leadsBody"><tr><td colspan="12" style="text-align:center;padding:30px;color:var(--text2)">Loading...</td></tr></tbody></table></div>
+    </tr></thead><tbody id="leadsBody"><tr><td colspan="13" style="text-align:center;padding:30px;color:var(--text2)">Loading...</td></tr></tbody></table></div>
   </div>
 
   <!-- Agents -->
@@ -355,24 +359,50 @@ function loadStats() {
     document.getElementById('sWASent').textContent = d.whatsappSent;
     document.getElementById('sWAFail').textContent = d.whatsappFailed;
     allLeads = d.leads || [];
+    populateLeadFilters();
     renderLeads();
   }).catch(function(e) { console.error('loadStats', e); });
 }
 
 // ── Leads ──
+function populateLeadFilters() {
+  function fillSelect(id, values) {
+    var sel = document.getElementById(id);
+    var current = sel.value;
+    var defaultOpt = sel.options[0];
+    sel.innerHTML = '';
+    sel.appendChild(defaultOpt);
+    values.forEach(function(v) {
+      var opt = document.createElement('option');
+      opt.value = v; opt.textContent = v;
+      sel.appendChild(opt);
+    });
+    if (values.indexOf(current) !== -1) sel.value = current;
+  }
+  var sources = Array.from(new Set(allLeads.map(function(l) { return l.lead_source; }).filter(Boolean))).sort();
+  var affiliates = Array.from(new Set(allLeads.map(function(l) { return l.assigned_source; }).filter(Boolean))).sort();
+  fillSelect('leadSourceFilter', sources);
+  fillSelect('leadAffiliateFilter', affiliates);
+}
+
 function renderLeads() {
   var q = (document.getElementById('leadSearch').value || '').toLowerCase();
+  var sourceFilter = document.getElementById('leadSourceFilter').value;
+  var affiliateFilter = document.getElementById('leadAffiliateFilter').value;
   var rows = allLeads.filter(function(l) {
+    if (sourceFilter && l.lead_source !== sourceFilter) return false;
+    if (affiliateFilter && l.assigned_source !== affiliateFilter) return false;
     return !q || JSON.stringify(l).toLowerCase().includes(q);
   });
   var b = document.getElementById('leadsBody');
-  if (!rows.length) { b.innerHTML = '<tr><td colspan="12" style="text-align:center;padding:30px;color:var(--text2)">No leads found.</td></tr>'; return; }
+  if (!rows.length) { b.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:30px;color:var(--text2)">No leads found.</td></tr>'; return; }
   b.innerHTML = rows.map(function(l) {
     var statusClass = l.lead_status === 'Assigned' ? 'b-assigned' : l.lead_status === 'Reassigned' ? 'b-reassigned' : l.lead_status === 'Active' ? 'b-active' : (l.lead_status||'').indexOf('Unassigned') === 0 ? 'b-failed' : 'b-pending';
     var p0c = l.whatsapp_p0_status === 'Sent' ? 'b-sent' : l.whatsapp_p0_status === 'Failed' ? 'b-failed' : 'b-pending';
     var p1c = l.whatsapp_p1_status === 'Sent' ? 'b-sent' : l.whatsapp_p1_status === 'Failed' ? 'b-failed' : 'b-pending';
     return '<tr>' +
       '<td style="font-family:JetBrains Mono,monospace;font-size:11px">' + esc(l.lead_id) + '</td>' +
+      '<td style="font-size:11px;color:var(--text2)">' + fmtDate(l.created_at) + '</td>' +
       '<td>' + esc(l.phone) + '</td><td>' + esc(l.name) + '</td>' +
       '<td>&#8377;' + Number(l.loan_amount||0).toLocaleString('en-IN') + '</td>' +
       '<td>' + esc(l.pincode||'—') + '</td><td>' + esc(l.lead_source) + '</td>' +
