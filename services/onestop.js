@@ -15,8 +15,9 @@ onestopClient.interceptors.request.use((req) => {
 
 async function assignLead(lead, agent, priorityScore) {
   try {
-    // Change 1: use assigned_source from payload if provided, else lead_source, else 'b2c'
-    const leadSource = lead.assigned_source || lead.lead_source || 'b2c';
+    // Always 'Qualified' for the OneStop assignment call — assigned_source/
+    // lead_source drive Source Config matching elsewhere, not this field.
+    const leadSource = 'Qualified';
 
     const payload = {
       assignedTo: agent.agent_email,
