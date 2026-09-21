@@ -131,11 +131,13 @@ function getDashboardHTML(baseUrl) {
       <select id="leadSourceFilter" onchange="renderLeads()"><option value="">All Sources</option></select>
       <select id="leadAffiliateFilter" onchange="renderLeads()"><option value="">All Affiliates/Clients</option></select>
       <input class="search-input" id="leadSearch" placeholder="Search leads..." oninput="renderLeads()">
+      <button class="btn btn-primary" id="btnBulkAssignLeads" onclick="openBulkAssignModal()" disabled>Bulk Assign Selected (0)</button>
     </div>
     <div class="tbl-wrap"><table><thead><tr>
+      <th><input type="checkbox" id="leadSelectAll" onchange="toggleAllLeads(this.checked)"></th>
       <th>Lead ID</th><th>Received At</th><th>Phone</th><th>Name</th><th>Amount</th><th>Pincode</th><th>Source</th><th>Affiliate/Client</th>
       <th>Assigned To</th><th>Status</th><th>WA P0</th><th>WA P1</th><th>Assigned At</th><th>Actions</th>
-    </tr></thead><tbody id="leadsBody"><tr><td colspan="14" style="text-align:center;padding:30px;color:var(--text2)">Loading...</td></tr></tbody></table></div>
+    </tr></thead><tbody id="leadsBody"><tr><td colspan="15" style="text-align:center;padding:30px;color:var(--text2)">Loading...</td></tr></tbody></table></div>
   </div>
 
   <!-- Agents -->
@@ -304,6 +306,34 @@ function getDashboardHTML(baseUrl) {
   </div>
 </div>
 
+<!-- Modal: Bulk Assign Leads -->
+<div class="modal-overlay hidden" id="bulkAssignModal">
+  <div class="modal">
+    <h2>Bulk Assign <span id="bulkAssignCount">0</span> Lead(s)</h2>
+    <div class="info-box" style="font-size:12px">
+      Leave Lead Source / Affiliate/Client blank to keep each lead's own value — only Priority, Send WhatsApp, and the rate apply to all selected leads. This runs in the background and paces itself at the rate below; check the Logs tab for progress.
+    </div>
+    <div class="form-group"><label>Use an existing Source Config (optional)</label>
+      <select id="baUseConfig" onchange="applyBulkAssignConfig()"><option value="">— pick to auto-fill —</option></select>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Lead Source override</label><input id="baLeadSource" placeholder="leave blank = keep each lead's own"></div>
+      <div class="form-group"><label>Affiliate/Client override</label><input id="baAssignedSource" placeholder="leave blank = keep each lead's own"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Send WhatsApp</label>
+        <select id="baSendWhatsapp"><option value="true">Yes</option><option value="false">No</option></select>
+      </div>
+      <div class="form-group"><label>Priority (sent to OneStop) *</label><input id="baPriorityScore" type="number" step="0.1" min="0" max="10" value="9.9"></div>
+    </div>
+    <div class="form-group"><label>Rate — leads assigned per minute</label><input id="baRatePerMinute" type="number" step="1" min="0" placeholder="0 = no limit, assign as fast as possible"></div>
+    <div class="form-actions">
+      <button class="btn" onclick="closeModal('bulkAssignModal')">Cancel</button>
+      <button class="btn btn-primary" id="btnBulkAssign" onclick="saveBulkAssign()">Start Bulk Assign</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal: Add/Edit WA Template Config -->
 <div class="modal-overlay hidden" id="waTemplateModal">
   <div class="modal">
@@ -413,6 +443,11 @@ function populateLeadFilters() {
   fillSelect('leadAffiliateFilter', affiliates);
 }
 
+var selectedLeadIds = new Set();
+var visibleEligibleLeadIds = [];
+
+function isBulkAssignable(l) { return l.lead_status === 'Unassigned - No Source Config'; }
+
 function renderLeads() {
   var q = (document.getElementById('leadSearch').value || '').toLowerCase();
   var sourceFilter = document.getElementById('leadSourceFilter').value;
@@ -422,13 +457,16 @@ function renderLeads() {
     if (affiliateFilter && l.assigned_source !== affiliateFilter) return false;
     return !q || JSON.stringify(l).toLowerCase().includes(q);
   });
+  visibleEligibleLeadIds = rows.filter(isBulkAssignable).map(function(l) { return l.lead_id; });
   var b = document.getElementById('leadsBody');
-  if (!rows.length) { b.innerHTML = '<tr><td colspan="14" style="text-align:center;padding:30px;color:var(--text2)">No leads found.</td></tr>'; return; }
+  if (!rows.length) { b.innerHTML = '<tr><td colspan="15" style="text-align:center;padding:30px;color:var(--text2)">No leads found.</td></tr>'; updateBulkAssignButton(); syncLeadSelectAllCheckbox(); return; }
   b.innerHTML = rows.map(function(l) {
     var statusClass = l.lead_status === 'Assigned' ? 'b-assigned' : l.lead_status === 'Reassigned' ? 'b-reassigned' : l.lead_status === 'Active' ? 'b-active' : (l.lead_status||'').indexOf('Unassigned') === 0 ? 'b-failed' : 'b-pending';
     var p0c = l.whatsapp_p0_status === 'Sent' ? 'b-sent' : l.whatsapp_p0_status === 'Failed' ? 'b-failed' : 'b-pending';
     var p1c = l.whatsapp_p1_status === 'Sent' ? 'b-sent' : l.whatsapp_p1_status === 'Failed' ? 'b-failed' : 'b-pending';
+    var assignable = isBulkAssignable(l);
     return '<tr>' +
+      '<td>' + (assignable ? '<input type="checkbox" class="lead-check" ' + (selectedLeadIds.has(l.lead_id)?'checked':'') + ' onchange="toggleLeadSelect(\\'' + escJs(l.lead_id) + '\\', this.checked)">' : '') + '</td>' +
       '<td style="font-family:JetBrains Mono,monospace;font-size:11px">' + esc(l.lead_id) + '</td>' +
       '<td style="font-size:11px;color:var(--text2)">' + fmtDate(l.created_at) + '</td>' +
       '<td>' + esc(l.phone) + '</td><td>' + esc(l.name) + '</td>' +
@@ -440,9 +478,101 @@ function renderLeads() {
       '<td><span class="badge ' + p0c + '">' + esc(l.whatsapp_p0_status||'—') + '</span></td>' +
       '<td>' + (l.whatsapp_p1_status ? '<span class="badge ' + p1c + '">' + esc(l.whatsapp_p1_status) + '</span>' : '—') + '</td>' +
       '<td style="font-size:11px;color:var(--text2)">' + fmtDate(l.assigned_at) + '</td>' +
-      '<td>' + (l.lead_status === 'Unassigned - No Source Config' ? '<button class="btn btn-sm btn-primary" onclick="openManualAssignModal(\\'' + escJs(l.lead_id) + '\\')">Assign</button>' : '—') + '</td>' +
+      '<td>' + (assignable ? '<button class="btn btn-sm btn-primary" onclick="openManualAssignModal(\\'' + escJs(l.lead_id) + '\\')">Assign</button>' : '—') + '</td>' +
       '</tr>';
   }).join('');
+  updateBulkAssignButton();
+  syncLeadSelectAllCheckbox();
+}
+
+function toggleLeadSelect(leadId, checked) {
+  if (checked) selectedLeadIds.add(leadId); else selectedLeadIds.delete(leadId);
+  updateBulkAssignButton();
+  syncLeadSelectAllCheckbox();
+}
+
+function toggleAllLeads(checked) {
+  visibleEligibleLeadIds.forEach(function(id) {
+    if (checked) selectedLeadIds.add(id); else selectedLeadIds.delete(id);
+  });
+  renderLeads();
+}
+
+function syncLeadSelectAllCheckbox() {
+  var cb = document.getElementById('leadSelectAll');
+  if (!cb) return;
+  var allSelected = visibleEligibleLeadIds.length > 0 && visibleEligibleLeadIds.every(function(id) { return selectedLeadIds.has(id); });
+  cb.checked = allSelected;
+  cb.indeterminate = !allSelected && visibleEligibleLeadIds.some(function(id) { return selectedLeadIds.has(id); });
+}
+
+function updateBulkAssignButton() {
+  var btn = document.getElementById('btnBulkAssignLeads');
+  if (!btn) return;
+  btn.disabled = selectedLeadIds.size === 0;
+  btn.textContent = 'Bulk Assign Selected (' + selectedLeadIds.size + ')';
+}
+
+function openBulkAssignModal() {
+  if (!selectedLeadIds.size) return;
+  document.getElementById('bulkAssignCount').textContent = selectedLeadIds.size;
+  document.getElementById('baLeadSource').value = '';
+  document.getElementById('baAssignedSource').value = '';
+  document.getElementById('baSendWhatsapp').value = 'true';
+  document.getElementById('baPriorityScore').value = 9.9;
+  document.getElementById('baRatePerMinute').value = '';
+
+  var sel = document.getElementById('baUseConfig');
+  sel.innerHTML = '<option value="">— pick to auto-fill —</option>';
+  allSources.forEach(function(s) {
+    var opt = document.createElement('option');
+    opt.value = s.id;
+    opt.textContent = s.lead_source + ' / ' + (s.assigned_source || '— all —');
+    sel.appendChild(opt);
+  });
+
+  document.getElementById('bulkAssignModal').classList.remove('hidden');
+}
+
+function applyBulkAssignConfig() {
+  var id = document.getElementById('baUseConfig').value;
+  if (!id) return;
+  var s = allSources.find(function(x) { return String(x.id) === id; });
+  if (!s) return;
+  document.getElementById('baLeadSource').value = s.lead_source;
+  document.getElementById('baAssignedSource').value = s.assigned_source || '';
+  document.getElementById('baSendWhatsapp').value = s.send_whatsapp === false ? 'false' : 'true';
+  document.getElementById('baPriorityScore').value = s.priority_score != null ? s.priority_score : 9.9;
+}
+
+function saveBulkAssign() {
+  var btn = document.getElementById('btnBulkAssign');
+  var lead_source = document.getElementById('baLeadSource').value.trim();
+  var assigned_source = document.getElementById('baAssignedSource').value.trim();
+  var send_whatsapp = document.getElementById('baSendWhatsapp').value === 'true';
+  var priority_score = parseFloat(document.getElementById('baPriorityScore').value);
+  var rateRaw = document.getElementById('baRatePerMinute').value.trim();
+  var rate_per_minute = rateRaw === '' ? 0 : parseFloat(rateRaw);
+  if (isNaN(priority_score)) return toast('Priority must be a number', 'error');
+  if (isNaN(rate_per_minute) || rate_per_minute < 0) return toast('Rate per minute must be 0 or a positive number', 'error');
+  btn.disabled = true;
+  fetch(API + '/leads/bulk-assign', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      lead_ids: Array.from(selectedLeadIds),
+      lead_source: lead_source || undefined, assigned_source: assigned_source || undefined,
+      send_whatsapp: send_whatsapp, priority_score: priority_score, rate_per_minute: rate_per_minute,
+    }),
+  })
+    .then(function(r) { return r.json(); }).then(function(j) {
+      btn.disabled = false;
+      if (j.code === 200) {
+        toast(j.message);
+        closeModal('bulkAssignModal');
+        selectedLeadIds.clear();
+        loadStats();
+      } else toast(j.message || 'Error', 'error');
+    }).catch(function(e) { btn.disabled = false; toast(e.message, 'error'); });
 }
 
 // ── Manual assign (leads stuck as Unassigned - No Source Config) ──
@@ -494,7 +624,7 @@ function saveManualAssign() {
   })
     .then(function(r) { return r.json(); }).then(function(j) {
       btn.disabled = false;
-      if (j.code === 200) { toast('Lead assigned to ' + j.data.assigned_to); closeModal('manualAssignModal'); loadStats(); }
+      if (j.code === 200) { selectedLeadIds.delete(leadId); toast('Lead assigned to ' + j.data.assigned_to); closeModal('manualAssignModal'); loadStats(); }
       else toast(j.message || 'Error', 'error');
     }).catch(function(e) { btn.disabled = false; toast(e.message, 'error'); });
 }
