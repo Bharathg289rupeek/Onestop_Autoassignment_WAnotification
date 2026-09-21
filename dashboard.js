@@ -134,8 +134,8 @@ function getDashboardHTML(baseUrl) {
     </div>
     <div class="tbl-wrap"><table><thead><tr>
       <th>Lead ID</th><th>Received At</th><th>Phone</th><th>Name</th><th>Amount</th><th>Pincode</th><th>Source</th><th>Affiliate/Client</th>
-      <th>Assigned To</th><th>Status</th><th>WA P0</th><th>WA P1</th><th>Assigned At</th>
-    </tr></thead><tbody id="leadsBody"><tr><td colspan="13" style="text-align:center;padding:30px;color:var(--text2)">Loading...</td></tr></tbody></table></div>
+      <th>Assigned To</th><th>Status</th><th>WA P0</th><th>WA P1</th><th>Assigned At</th><th>Actions</th>
+    </tr></thead><tbody id="leadsBody"><tr><td colspan="14" style="text-align:center;padding:30px;color:var(--text2)">Loading...</td></tr></tbody></table></div>
   </div>
 
   <!-- Agents -->
@@ -276,6 +276,34 @@ function getDashboardHTML(baseUrl) {
   </div>
 </div>
 
+<!-- Modal: Manually Assign a Lead -->
+<div class="modal-overlay hidden" id="manualAssignModal">
+  <div class="modal">
+    <h2>Manually Assign Lead</h2>
+    <input type="hidden" id="maLeadId">
+    <div class="info-box" style="font-size:12px">
+      This lead has no matching Source Config, so it was never assigned. Pick the values to use for it directly — this does not create or change any Source Config row.
+    </div>
+    <div class="form-group"><label>Use an existing Source Config (optional)</label>
+      <select id="maUseConfig" onchange="applyManualAssignConfig()"><option value="">— pick to auto-fill —</option></select>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Lead Source *</label><input id="maLeadSource" placeholder="e.g. adityabirlalms"></div>
+      <div class="form-group"><label>Affiliate/Client</label><input id="maAssignedSource" placeholder="leave blank = none"></div>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Send WhatsApp</label>
+        <select id="maSendWhatsapp"><option value="true">Yes</option><option value="false">No</option></select>
+      </div>
+      <div class="form-group"><label>Priority (sent to OneStop) *</label><input id="maPriorityScore" type="number" step="0.1" min="0" max="10" value="9.9"></div>
+    </div>
+    <div class="form-actions">
+      <button class="btn" onclick="closeModal('manualAssignModal')">Cancel</button>
+      <button class="btn btn-primary" id="btnManualAssign" onclick="saveManualAssign()">Assign</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal: Add/Edit WA Template Config -->
 <div class="modal-overlay hidden" id="waTemplateModal">
   <div class="modal">
@@ -395,7 +423,7 @@ function renderLeads() {
     return !q || JSON.stringify(l).toLowerCase().includes(q);
   });
   var b = document.getElementById('leadsBody');
-  if (!rows.length) { b.innerHTML = '<tr><td colspan="13" style="text-align:center;padding:30px;color:var(--text2)">No leads found.</td></tr>'; return; }
+  if (!rows.length) { b.innerHTML = '<tr><td colspan="14" style="text-align:center;padding:30px;color:var(--text2)">No leads found.</td></tr>'; return; }
   b.innerHTML = rows.map(function(l) {
     var statusClass = l.lead_status === 'Assigned' ? 'b-assigned' : l.lead_status === 'Reassigned' ? 'b-reassigned' : l.lead_status === 'Active' ? 'b-active' : (l.lead_status||'').indexOf('Unassigned') === 0 ? 'b-failed' : 'b-pending';
     var p0c = l.whatsapp_p0_status === 'Sent' ? 'b-sent' : l.whatsapp_p0_status === 'Failed' ? 'b-failed' : 'b-pending';
@@ -412,8 +440,63 @@ function renderLeads() {
       '<td><span class="badge ' + p0c + '">' + esc(l.whatsapp_p0_status||'—') + '</span></td>' +
       '<td>' + (l.whatsapp_p1_status ? '<span class="badge ' + p1c + '">' + esc(l.whatsapp_p1_status) + '</span>' : '—') + '</td>' +
       '<td style="font-size:11px;color:var(--text2)">' + fmtDate(l.assigned_at) + '</td>' +
+      '<td>' + (l.lead_status === 'Unassigned - No Source Config' ? '<button class="btn btn-sm btn-primary" onclick="openManualAssignModal(\\'' + escJs(l.lead_id) + '\\')">Assign</button>' : '—') + '</td>' +
       '</tr>';
   }).join('');
+}
+
+// ── Manual assign (leads stuck as Unassigned - No Source Config) ──
+function openManualAssignModal(leadId) {
+  var lead = allLeads.find(function(l) { return l.lead_id === leadId; });
+  if (!lead) return toast('Lead not found', 'error');
+  document.getElementById('maLeadId').value = leadId;
+  document.getElementById('maLeadSource').value = lead.lead_source || '';
+  document.getElementById('maAssignedSource').value = lead.assigned_source || '';
+  document.getElementById('maSendWhatsapp').value = 'true';
+  document.getElementById('maPriorityScore').value = 9.9;
+
+  var sel = document.getElementById('maUseConfig');
+  sel.innerHTML = '<option value="">— pick to auto-fill —</option>';
+  allSources.forEach(function(s) {
+    var opt = document.createElement('option');
+    opt.value = s.id;
+    opt.textContent = s.lead_source + ' / ' + (s.assigned_source || '— all —');
+    sel.appendChild(opt);
+  });
+
+  document.getElementById('manualAssignModal').classList.remove('hidden');
+}
+
+function applyManualAssignConfig() {
+  var id = document.getElementById('maUseConfig').value;
+  if (!id) return;
+  var s = allSources.find(function(x) { return String(x.id) === id; });
+  if (!s) return;
+  document.getElementById('maLeadSource').value = s.lead_source;
+  document.getElementById('maAssignedSource').value = s.assigned_source || '';
+  document.getElementById('maSendWhatsapp').value = s.send_whatsapp === false ? 'false' : 'true';
+  document.getElementById('maPriorityScore').value = s.priority_score != null ? s.priority_score : 9.9;
+}
+
+function saveManualAssign() {
+  var btn = document.getElementById('btnManualAssign');
+  var leadId = document.getElementById('maLeadId').value;
+  var lead_source = document.getElementById('maLeadSource').value.trim();
+  var assigned_source = document.getElementById('maAssignedSource').value.trim();
+  var send_whatsapp = document.getElementById('maSendWhatsapp').value === 'true';
+  var priority_score = parseFloat(document.getElementById('maPriorityScore').value);
+  if (!lead_source) return toast('Lead Source is required', 'error');
+  if (isNaN(priority_score)) return toast('Priority must be a number', 'error');
+  btn.disabled = true;
+  fetch(API + '/leads/' + encodeURIComponent(leadId) + '/assign', {
+    method: 'POST', headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({ lead_source: lead_source, assigned_source: assigned_source, send_whatsapp: send_whatsapp, priority_score: priority_score }),
+  })
+    .then(function(r) { return r.json(); }).then(function(j) {
+      btn.disabled = false;
+      if (j.code === 200) { toast('Lead assigned to ' + j.data.assigned_to); closeModal('manualAssignModal'); loadStats(); }
+      else toast(j.message || 'Error', 'error');
+    }).catch(function(e) { btn.disabled = false; toast(e.message, 'error'); });
 }
 
 // ── Agents ──
@@ -818,6 +901,14 @@ function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// For a value embedded inside a single-quoted JS string literal in an
+// onclick="fn('...')" attribute: escape backslash/quote for JS first,
+// then HTML-escape the result for the attribute itself.
+function escJs(s) {
+  if (s == null) return '';
+  return esc(String(s).replace(/\\\\/g,'\\\\\\\\').replace(/'/g,"\\\\'"));
+}
+
 function fmtDate(d) {
   if (!d) return '—';
   var dt = new Date(d);
@@ -826,6 +917,7 @@ function fmtDate(d) {
 
 // Initial load
 loadStats();
+loadSourceConfigs();
 </script>
 </body>
 </html>`;

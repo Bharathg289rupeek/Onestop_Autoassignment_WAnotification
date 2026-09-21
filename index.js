@@ -187,6 +187,60 @@ app.post('/api/check-reassignment', async (req, res) => {
   }
 });
 
+// ─── Manually assign a lead stuck as unassigned (e.g. NO_SOURCE_CONFIG) ──
+// Bypasses the Source Config lookup — the operator picks lead_source,
+// assigned_source (affiliate/client), priority, and whether to send WhatsApp
+// directly, rather than needing a matching config row first.
+app.post('/api/leads/:leadId/assign', async (req, res) => {
+  try {
+    const { leadId } = req.params;
+    const lead = await db.getLeadByLeadId(leadId);
+    if (!lead) return res.status(404).json({ code: 404, message: 'Lead not found' });
+    if (lead.assigned_agent_id) return res.status(400).json({ code: 400, message: 'Lead is already assigned' });
+    if (!lead.pincode) return res.status(400).json({ code: 400, message: 'Lead has no pincode — cannot round-robin assign' });
+
+    const lead_source = String(req.body.lead_source || lead.lead_source || '').trim();
+    const assigned_source = String(req.body.assigned_source != null ? req.body.assigned_source : (lead.assigned_source || '')).trim();
+    if (!lead_source) return res.status(400).json({ code: 400, message: 'lead_source is required' });
+
+    const priorityScore = req.body.priority_score != null && req.body.priority_score !== '' ? parseFloat(req.body.priority_score) : 9.9;
+    if (Number.isNaN(priorityScore)) return res.status(400).json({ code: 400, message: 'priority_score must be a number' });
+    const sendWhatsapp = req.body.send_whatsapp !== false;
+
+    const agent = await db.claimAgentByPincode(lead.pincode, null);
+    if (!agent) {
+      const n = await db.countAssignableAgents(lead.pincode);
+      const reason = n === 0 ? 'NO_AGENT_IN_PINCODE' : 'ALL_AGENTS_BUSY';
+      return res.status(409).json({ code: 409, message: 'No assignable agent in pincode ' + lead.pincode + ' (' + reason + ')' });
+    }
+
+    const externalId = lead.external_id || buildExternalId(lead_source, assigned_source, lead.phone);
+    const leadForAssign = { ...lead, lead_source, assigned_source: assigned_source || null, external_id: externalId };
+
+    const assignResult = await onestop.assignLead(leadForAssign, agent, priorityScore);
+
+    await db.manualAssignLead(leadId, agent, {
+      lead_source, assigned_source: assigned_source || null, external_id: externalId,
+      onestop_lead_id: assignResult.data?.leadId || '',
+    });
+
+    await db.appendLog('ASSIGN', leadId, lead.phone,
+      'Manually assigned to ' + agent.agent_name + ' (' + agent.agent_email + ') pin:' + lead.pincode +
+      ' rotation#' + agent.assign_count + ' mode:manual_override', 'SUCCESS');
+
+    let waResult = { success: false, message: 'Skipped by operator' };
+    if (sendWhatsapp) {
+      waResult = await whatsapp.sendWhatsAppToAgent(agent.agent_phone, leadForAssign, agent, false, null);
+    }
+    await db.updateLeadWhatsapp(leadId, 'p0', !sendWhatsapp ? 'Skipped' : (waResult.success ? 'Sent' : 'Failed'));
+
+    return res.json({
+      code: 200, message: 'Lead manually assigned',
+      data: { lead_id: leadId, assigned_to: agent.agent_email, pincode: lead.pincode },
+    });
+  } catch (e) { return res.status(500).json({ code: 500, message: e.message }); }
+});
+
 // ─── Stats ──────────────────────────────────────────────────
 app.get('/api/stats', async (_, res) => {
   try { return res.json({ code: 200, data: await db.getDashboardStats() }); }

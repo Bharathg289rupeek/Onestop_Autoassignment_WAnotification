@@ -144,6 +144,26 @@ async function updateLeadWhatsapp(leadId, field, status) {
   await pool.query('UPDATE leads SET ' + col + ' = $1, last_updated = NOW() WHERE lead_id = $2', [status, leadId]);
 }
 
+async function getLeadByLeadId(leadId) {
+  const { rows } = await pool.query('SELECT * FROM leads WHERE lead_id = $1', [leadId]);
+  return rows[0] || null;
+}
+
+/** Manually push a previously-unassigned lead (e.g. NO_SOURCE_CONFIG) to an agent. */
+async function manualAssignLead(leadId, agent, overrides) {
+  const { rows } = await pool.query(
+    `UPDATE leads SET
+       assigned_agent_id = $1, assigned_email = $2, assigned_name = $3, assigned_phone = $4,
+       assigned_at = NOW(), lead_status = 'Assigned', onestop_lead_id = $5,
+       lead_source = $6, assigned_source = $7, external_id = $8, last_updated = NOW()
+     WHERE lead_id = $9
+     RETURNING *`,
+    [agent.id, agent.agent_email, agent.agent_name, agent.agent_phone, overrides.onestop_lead_id || null,
+     overrides.lead_source, overrides.assigned_source || null, overrides.external_id, leadId]
+  );
+  return rows[0];
+}
+
 async function getLeadsPendingReassignment(delayMinutes) {
   const { rows } = await pool.query(
     "SELECT l.* FROM leads l WHERE l.lead_status = 'Assigned' AND l.activity_checked = false AND l.reassigned = false AND l.assigned_agent_id IS NOT NULL AND l.assigned_at < NOW() - INTERVAL '1 minute' * $1 ORDER BY l.assigned_at ASC",
@@ -400,7 +420,7 @@ async function bulkSetSystemConfig(entries) {
 
 module.exports = {
   claimAgentByPincode, countAssignableAgents, findAgentByEmail, findNextAgent, normalizePincode,
-  insertLead, updateLeadWhatsapp, getLeadsPendingReassignment,
+  insertLead, updateLeadWhatsapp, getLeadsPendingReassignment, getLeadByLeadId, manualAssignLead,
   markLeadActive, reassignLead, markLeadNoAgent,
   appendLog, getRecentLogs, getDashboardStats,
   getAllAgents, addAgent, updateAgent, deleteAgent, deleteAgents, bulkReplaceAgents,
