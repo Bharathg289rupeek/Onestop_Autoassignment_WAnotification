@@ -320,6 +320,9 @@ function getDashboardHTML(baseUrl) {
       <div class="form-group"><label>Lead Source override</label><input id="baLeadSource" placeholder="leave blank = keep each lead's own"></div>
       <div class="form-group"><label>Affiliate/Client override</label><input id="baAssignedSource" placeholder="leave blank = keep each lead's own"></div>
     </div>
+    <div class="form-group"><label>Assign to this agent in OneStop (optional)</label>
+      <select id="baForceAgent"><option value="">— pincode round robin (default) —</option></select>
+    </div>
     <div class="form-row">
       <div class="form-group"><label>Send WhatsApp</label>
         <select id="baSendWhatsapp"><option value="true">Yes</option><option value="false">No</option></select>
@@ -531,6 +534,15 @@ function openBulkAssignModal() {
     sel.appendChild(opt);
   });
 
+  var agentSel = document.getElementById('baForceAgent');
+  agentSel.innerHTML = '<option value="">— pincode round robin (default) —</option>';
+  allAgents.filter(function(a) { return a.is_active; }).forEach(function(a) {
+    var opt = document.createElement('option');
+    opt.value = a.agent_email;
+    opt.textContent = a.agent_name + ' (' + a.agent_email + ')';
+    agentSel.appendChild(opt);
+  });
+
   document.getElementById('bulkAssignModal').classList.remove('hidden');
 }
 
@@ -549,6 +561,7 @@ function saveBulkAssign() {
   var btn = document.getElementById('btnBulkAssign');
   var lead_source = document.getElementById('baLeadSource').value.trim();
   var assigned_source = document.getElementById('baAssignedSource').value.trim();
+  var agent_email = document.getElementById('baForceAgent').value;
   var send_whatsapp = document.getElementById('baSendWhatsapp').value === 'true';
   var priority_score = parseFloat(document.getElementById('baPriorityScore').value);
   var rateRaw = document.getElementById('baRatePerMinute').value.trim();
@@ -561,6 +574,7 @@ function saveBulkAssign() {
     body: JSON.stringify({
       lead_ids: Array.from(selectedLeadIds),
       lead_source: lead_source || undefined, assigned_source: assigned_source || undefined,
+      agent_email: agent_email || undefined,
       send_whatsapp: send_whatsapp, priority_score: priority_score, rate_per_minute: rate_per_minute,
     }),
   })
@@ -1048,6 +1062,7 @@ function fmtDate(d) {
 // Initial load
 loadStats();
 loadSourceConfigs();
+loadAgents();
 </script>
 </body>
 </html>`;

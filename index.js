@@ -190,17 +190,22 @@ app.post('/api/check-reassignment', async (req, res) => {
 // Shared by the single and bulk manual-assign routes below. Bypasses the
 // Source Config lookup — the operator picks lead_source, assigned_source
 // (affiliate/client), priority, and whether to send WhatsApp directly,
-// rather than needing a matching config row first.
-async function manuallyAssignLead(lead, { lead_source, assigned_source, priorityScore, sendWhatsapp }) {
+// rather than needing a matching config row first. Pass forcedAgent to
+// assign every lead to that one agent (the name/email OneStop sees)
+// instead of the pincode round robin.
+async function manuallyAssignLead(lead, { lead_source, assigned_source, priorityScore, sendWhatsapp, forcedAgent }) {
   if (lead.assigned_agent_id) return { ok: false, status: 400, message: 'Lead is already assigned' };
-  if (!lead.pincode) return { ok: false, status: 400, message: 'Lead has no pincode — cannot round-robin assign' };
   if (!lead_source) return { ok: false, status: 400, message: 'lead_source is required' };
 
-  const agent = await db.claimAgentByPincode(lead.pincode, null);
+  let agent = forcedAgent || null;
   if (!agent) {
-    const n = await db.countAssignableAgents(lead.pincode);
-    const reason = n === 0 ? 'NO_AGENT_IN_PINCODE' : 'ALL_AGENTS_BUSY';
-    return { ok: false, status: 409, message: 'No assignable agent in pincode ' + lead.pincode + ' (' + reason + ')' };
+    if (!lead.pincode) return { ok: false, status: 400, message: 'Lead has no pincode — cannot round-robin assign' };
+    agent = await db.claimAgentByPincode(lead.pincode, null);
+    if (!agent) {
+      const n = await db.countAssignableAgents(lead.pincode);
+      const reason = n === 0 ? 'NO_AGENT_IN_PINCODE' : 'ALL_AGENTS_BUSY';
+      return { ok: false, status: 409, message: 'No assignable agent in pincode ' + lead.pincode + ' (' + reason + ')' };
+    }
   }
 
   const externalId = lead.external_id || buildExternalId(lead_source, assigned_source, lead.phone);
@@ -214,8 +219,8 @@ async function manuallyAssignLead(lead, { lead_source, assigned_source, priority
   });
 
   await db.appendLog('ASSIGN', lead.lead_id, lead.phone,
-    'Manually assigned to ' + agent.agent_name + ' (' + agent.agent_email + ') pin:' + lead.pincode +
-    ' rotation#' + agent.assign_count + ' mode:manual_override', 'SUCCESS');
+    'Manually assigned to ' + agent.agent_name + ' (' + agent.agent_email + ') pin:' + (lead.pincode || '-') +
+    (forcedAgent ? ' mode:manual_override_forced' : ' rotation#' + agent.assign_count + ' mode:manual_override'), 'SUCCESS');
 
   let waResult = { success: false, message: 'Skipped by operator' };
   if (sendWhatsapp) {
@@ -273,6 +278,14 @@ app.post('/api/leads/bulk-assign', async (req, res) => {
     }
     const delayMs = ratePerMinute > 0 ? Math.ceil(60000 / ratePerMinute) : 0;
 
+    // Optional: force every lead in this batch to one specific agent (the
+    // name/email OneStop sees) instead of the pincode round robin.
+    let forcedAgent = null;
+    if (req.body.agent_email) {
+      forcedAgent = await db.findAgentByEmail(req.body.agent_email);
+      if (!forcedAgent) return res.status(400).json({ code: 400, message: 'agent_email not found or inactive: ' + req.body.agent_email });
+    }
+
     (async () => {
       let assigned = 0, failed = 0;
       for (const leadId of leadIds) {
@@ -284,7 +297,7 @@ app.post('/api/leads/bulk-assign', async (req, res) => {
           } else {
             const lead_source = overrideSource || lead.lead_source || '';
             const assigned_source = overrideAffiliate != null ? overrideAffiliate : (lead.assigned_source || '');
-            const result = await manuallyAssignLead(lead, { lead_source, assigned_source, priorityScore, sendWhatsapp });
+            const result = await manuallyAssignLead(lead, { lead_source, assigned_source, priorityScore, sendWhatsapp, forcedAgent });
             if (result.ok) assigned++;
             else { failed++; await db.appendLog('BULK_ASSIGN', leadId, lead.phone, result.message, 'FAILED'); }
           }
