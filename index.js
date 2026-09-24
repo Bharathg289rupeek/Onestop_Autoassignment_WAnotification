@@ -193,7 +193,7 @@ app.post('/api/check-reassignment', async (req, res) => {
 // rather than needing a matching config row first. Pass forcedAgent to
 // assign every lead to that one agent (the name/email OneStop sees)
 // instead of the pincode round robin.
-async function manuallyAssignLead(lead, { lead_source, assigned_source, priorityScore, sendWhatsapp, forcedAgent }) {
+async function manuallyAssignLead(lead, { lead_source, assigned_source, priorityScore, sendWhatsapp, forcedAgent, oneStopLeadSource }) {
   if (lead.assigned_agent_id) return { ok: false, status: 400, message: 'Lead is already assigned' };
   if (!lead_source) return { ok: false, status: 400, message: 'lead_source is required' };
 
@@ -211,7 +211,7 @@ async function manuallyAssignLead(lead, { lead_source, assigned_source, priority
   const externalId = lead.external_id || buildExternalId(lead_source, assigned_source, lead.phone);
   const leadForAssign = { ...lead, lead_source, assigned_source: assigned_source || null, external_id: externalId };
 
-  const assignResult = await onestop.assignLead(leadForAssign, agent, priorityScore);
+  const assignResult = await onestop.assignLead(leadForAssign, agent, priorityScore, oneStopLeadSource);
 
   await db.manualAssignLead(lead.lead_id, agent, {
     lead_source, assigned_source: assigned_source || null, external_id: externalId,
@@ -243,8 +243,9 @@ app.post('/api/leads/:leadId/assign', async (req, res) => {
     const priorityScore = req.body.priority_score != null && req.body.priority_score !== '' ? parseFloat(req.body.priority_score) : 9.9;
     if (Number.isNaN(priorityScore)) return res.status(400).json({ code: 400, message: 'priority_score must be a number' });
     const sendWhatsapp = req.body.send_whatsapp !== false;
+    const oneStopLeadSource = req.body.onestop_lead_source ? String(req.body.onestop_lead_source).trim() : undefined;
 
-    const result = await manuallyAssignLead(lead, { lead_source, assigned_source, priorityScore, sendWhatsapp });
+    const result = await manuallyAssignLead(lead, { lead_source, assigned_source, priorityScore, sendWhatsapp, oneStopLeadSource });
     if (!result.ok) return res.status(result.status).json({ code: result.status, message: result.message });
 
     return res.json({
@@ -271,6 +272,7 @@ app.post('/api/leads/bulk-assign', async (req, res) => {
     const priorityScore = req.body.priority_score != null && req.body.priority_score !== '' ? parseFloat(req.body.priority_score) : 9.9;
     if (Number.isNaN(priorityScore)) return res.status(400).json({ code: 400, message: 'priority_score must be a number' });
     const sendWhatsapp = req.body.send_whatsapp !== false;
+    const oneStopLeadSource = req.body.onestop_lead_source ? String(req.body.onestop_lead_source).trim() : undefined;
 
     const ratePerMinute = req.body.rate_per_minute != null && req.body.rate_per_minute !== '' ? parseFloat(req.body.rate_per_minute) : 0;
     if (Number.isNaN(ratePerMinute) || ratePerMinute < 0) {
@@ -297,7 +299,7 @@ app.post('/api/leads/bulk-assign', async (req, res) => {
           } else {
             const lead_source = overrideSource || lead.lead_source || '';
             const assigned_source = overrideAffiliate != null ? overrideAffiliate : (lead.assigned_source || '');
-            const result = await manuallyAssignLead(lead, { lead_source, assigned_source, priorityScore, sendWhatsapp, forcedAgent });
+            const result = await manuallyAssignLead(lead, { lead_source, assigned_source, priorityScore, sendWhatsapp, forcedAgent, oneStopLeadSource });
             if (result.ok) assigned++;
             else { failed++; await db.appendLog('BULK_ASSIGN', leadId, lead.phone, result.message, 'FAILED'); }
           }

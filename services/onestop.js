@@ -13,11 +13,12 @@ onestopClient.interceptors.request.use((req) => {
   return req;
 });
 
-async function assignLead(lead, agent, priorityScore) {
+async function assignLead(lead, agent, priorityScore, oneStopLeadSource) {
   try {
-    // Always 'b2c' for the OneStop assignment call — assigned_source/
+    // Defaults to 'b2c' for the OneStop assignment call — assigned_source/
     // lead_source drive Source Config matching elsewhere, not this field.
-    const leadSource = 'b2c';
+    // Callers (manual/bulk assign) can override it per-lead or per-batch.
+    const leadSource = oneStopLeadSource || 'b2c';
 
     const payload = {
       assignedTo: agent.agent_email,

@@ -299,6 +299,7 @@ function getDashboardHTML(baseUrl) {
       </div>
       <div class="form-group"><label>Priority (sent to OneStop) *</label><input id="maPriorityScore" type="number" step="0.1" min="0" max="10" value="9.9"></div>
     </div>
+    <div class="form-group"><label>OneStop leadSource</label><input id="maOneStopLeadSource" placeholder="leave blank = b2c (default)"></div>
     <div class="form-actions">
       <button class="btn" onclick="closeModal('manualAssignModal')">Cancel</button>
       <button class="btn btn-primary" id="btnManualAssign" onclick="saveManualAssign()">Assign</button>
@@ -329,6 +330,7 @@ function getDashboardHTML(baseUrl) {
       </div>
       <div class="form-group"><label>Priority (sent to OneStop) *</label><input id="baPriorityScore" type="number" step="0.1" min="0" max="10" value="9.9"></div>
     </div>
+    <div class="form-group"><label>OneStop leadSource (applies to all selected leads)</label><input id="baOneStopLeadSource" placeholder="leave blank = b2c (default)"></div>
     <div class="form-group"><label>Rate — leads assigned per minute</label><input id="baRatePerMinute" type="number" step="1" min="0" placeholder="0 = no limit, assign as fast as possible"></div>
     <div class="form-actions">
       <button class="btn" onclick="closeModal('bulkAssignModal')">Cancel</button>
@@ -523,6 +525,7 @@ function openBulkAssignModal() {
   document.getElementById('baAssignedSource').value = '';
   document.getElementById('baSendWhatsapp').value = 'true';
   document.getElementById('baPriorityScore').value = 9.9;
+  document.getElementById('baOneStopLeadSource').value = '';
   document.getElementById('baRatePerMinute').value = '';
 
   var sel = document.getElementById('baUseConfig');
@@ -564,6 +567,7 @@ function saveBulkAssign() {
   var agent_email = document.getElementById('baForceAgent').value;
   var send_whatsapp = document.getElementById('baSendWhatsapp').value === 'true';
   var priority_score = parseFloat(document.getElementById('baPriorityScore').value);
+  var onestop_lead_source = document.getElementById('baOneStopLeadSource').value.trim();
   var rateRaw = document.getElementById('baRatePerMinute').value.trim();
   var rate_per_minute = rateRaw === '' ? 0 : parseFloat(rateRaw);
   if (isNaN(priority_score)) return toast('Priority must be a number', 'error');
@@ -574,7 +578,7 @@ function saveBulkAssign() {
     body: JSON.stringify({
       lead_ids: Array.from(selectedLeadIds),
       lead_source: lead_source || undefined, assigned_source: assigned_source || undefined,
-      agent_email: agent_email || undefined,
+      agent_email: agent_email || undefined, onestop_lead_source: onestop_lead_source || undefined,
       send_whatsapp: send_whatsapp, priority_score: priority_score, rate_per_minute: rate_per_minute,
     }),
   })
@@ -598,6 +602,7 @@ function openManualAssignModal(leadId) {
   document.getElementById('maAssignedSource').value = lead.assigned_source || '';
   document.getElementById('maSendWhatsapp').value = 'true';
   document.getElementById('maPriorityScore').value = 9.9;
+  document.getElementById('maOneStopLeadSource').value = '';
 
   var sel = document.getElementById('maUseConfig');
   sel.innerHTML = '<option value="">— pick to auto-fill —</option>';
@@ -629,12 +634,13 @@ function saveManualAssign() {
   var assigned_source = document.getElementById('maAssignedSource').value.trim();
   var send_whatsapp = document.getElementById('maSendWhatsapp').value === 'true';
   var priority_score = parseFloat(document.getElementById('maPriorityScore').value);
+  var onestop_lead_source = document.getElementById('maOneStopLeadSource').value.trim();
   if (!lead_source) return toast('Lead Source is required', 'error');
   if (isNaN(priority_score)) return toast('Priority must be a number', 'error');
   btn.disabled = true;
   fetch(API + '/leads/' + encodeURIComponent(leadId) + '/assign', {
     method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({ lead_source: lead_source, assigned_source: assigned_source, send_whatsapp: send_whatsapp, priority_score: priority_score }),
+    body: JSON.stringify({ lead_source: lead_source, assigned_source: assigned_source, send_whatsapp: send_whatsapp, priority_score: priority_score, onestop_lead_source: onestop_lead_source || undefined }),
   })
     .then(function(r) { return r.json(); }).then(function(j) {
       btn.disabled = false;
