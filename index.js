@@ -327,6 +327,21 @@ app.get('/api/stats', async (_, res) => {
   catch (e) { console.error('[stats]', e); return res.status(500).json({ code: 500, message: e.message }); }
 });
 
+// Paginated + filtered leads for the Leads tab (replaces shipping the whole
+// table to the browser on every load).
+app.get('/api/leads', async (req, res) => {
+  try {
+    const { page, pageSize, search, lead_source, assigned_source } = req.query;
+    const data = await db.getLeadsPage({ page, pageSize, search, leadSource: lead_source, assignedSource: assigned_source });
+    return res.json({ code: 200, data });
+  } catch (e) { return res.status(500).json({ code: 500, message: e.message }); }
+});
+
+app.get('/api/leads/filter-options', async (_, res) => {
+  try { return res.json({ code: 200, data: await db.getLeadFilterOptions() }); }
+  catch (e) { return res.status(500).json({ code: 500, message: e.message }); }
+});
+
 // ─── Logs ───────────────────────────────────────────────────
 app.get('/api/logs', async (_, res) => {
   try { return res.json({ code: 200, data: { logs: await db.getRecentLogs(200) } }); }

@@ -208,35 +208,79 @@ async function getRecentLogs(limit) {
 }
 
 // ─── Dashboard Stats ───────────────────────────────────────
-
-const STATS_QUERY_TIMEOUT_MS = 10000;
+// Aggregated in SQL instead of pulling every lead row into Node — the
+// dashboard used to fetch and render the entire leads table on every load,
+// which got slow as the table grew. See getLeadsPage() for the paginated,
+// filtered list the Leads tab actually renders.
 
 async function getDashboardStats() {
-  console.log('[getDashboardStats] Starting query at', new Date().toISOString());
-  const startTime = Date.now();
+  const { rows } = await pool.query(`
+    SELECT
+      COUNT(*)::int AS total,
+      COUNT(*) FILTER (WHERE lead_status = 'Assigned')::int AS assigned,
+      COUNT(*) FILTER (WHERE assigned_agent_id IS NULL)::int AS unassigned,
+      COUNT(*) FILTER (WHERE reassigned = true)::int AS reassigned,
+      COUNT(*) FILTER (WHERE lead_status = 'Active')::int AS active,
+      (COUNT(*) FILTER (WHERE whatsapp_p0_status = 'Sent') + COUNT(*) FILTER (WHERE whatsapp_p1_status = 'Sent'))::int AS whatsapp_sent,
+      (COUNT(*) FILTER (WHERE whatsapp_p0_status = 'Failed') + COUNT(*) FILTER (WHERE whatsapp_p1_status = 'Failed'))::int AS whatsapp_failed
+    FROM leads
+  `);
+  const s = rows[0];
+  return {
+    total: s.total, assigned: s.assigned, unassigned: s.unassigned, reassigned: s.reassigned,
+    active: s.active, whatsappSent: s.whatsapp_sent, whatsappFailed: s.whatsapp_failed,
+  };
+}
 
-  const queryPromise = pool.query('SELECT * FROM leads ORDER BY created_at DESC');
-  const timeoutPromise = new Promise((_, reject) =>
-    setTimeout(() => reject(new Error('getDashboardStats timed out after ' + STATS_QUERY_TIMEOUT_MS + 'ms')), STATS_QUERY_TIMEOUT_MS)
+const LEADS_PAGE_SIZE_DEFAULT = 50;
+const LEADS_PAGE_SIZE_MAX = 200;
+
+/** Paginated + filtered leads for the Leads tab table. */
+async function getLeadsPage({ page, pageSize, search, leadSource, assignedSource }) {
+  const conditions = [];
+  const params = [];
+  let i = 1;
+
+  if (leadSource) { conditions.push('lead_source = $' + i); params.push(leadSource); i++; }
+  if (assignedSource) { conditions.push('assigned_source = $' + i); params.push(assignedSource); i++; }
+  if (search) {
+    conditions.push(
+      `(lead_id ILIKE $${i} OR phone ILIKE $${i} OR name ILIKE $${i} OR pincode ILIKE $${i} OR ` +
+      `lead_source ILIKE $${i} OR assigned_source ILIKE $${i} OR assigned_name ILIKE $${i} OR ` +
+      `assigned_email ILIKE $${i} OR lead_status ILIKE $${i})`
+    );
+    params.push('%' + search + '%');
+    i++;
+  }
+  const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+
+  const { rows: countRows } = await pool.query(`SELECT COUNT(*)::int AS n FROM leads ${where}`, params);
+  const total = countRows[0].n;
+
+  const limit = Math.min(Math.max(parseInt(pageSize, 10) || LEADS_PAGE_SIZE_DEFAULT, 1), LEADS_PAGE_SIZE_MAX);
+  const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+  const offset = (pageNum - 1) * limit;
+
+  const { rows } = await pool.query(
+    `SELECT * FROM leads ${where} ORDER BY created_at DESC LIMIT $${i} OFFSET $${i + 1}`,
+    [...params, limit, offset]
   );
 
-  const { rows: leads } = await Promise.race([queryPromise, timeoutPromise]);
-  console.log('[getDashboardStats] Query returned', leads.length, 'rows in', (Date.now() - startTime) + 'ms');
+  return { rows, total, page: pageNum, pageSize: limit };
+}
 
-  let total = 0, assigned = 0, reassignedCount = 0, active = 0, waSent = 0, waFailed = 0, unassigned = 0;
-  for (const l of leads) {
-    total++;
-    if (l.assigned_agent_id == null) unassigned++;
-    if (l.lead_status === 'Assigned') assigned++;
-    if (l.lead_status === 'Active') active++;
-    if (l.reassigned === true) reassignedCount++;
-    if (l.whatsapp_p0_status === 'Sent') waSent++;
-    if (l.whatsapp_p0_status === 'Failed') waFailed++;
-    if (l.whatsapp_p1_status === 'Sent') waSent++;
-    if (l.whatsapp_p1_status === 'Failed') waFailed++;
-  }
-
-  return { total, assigned, unassigned, reassigned: reassignedCount, active, whatsappSent: waSent, whatsappFailed: waFailed, leads };
+/** Distinct lead_source / assigned_source values, for the Leads tab filter dropdowns. */
+async function getLeadFilterOptions() {
+  const { rows: sources } = await pool.query(
+    "SELECT DISTINCT lead_source FROM leads WHERE lead_source IS NOT NULL AND lead_source <> '' ORDER BY lead_source"
+  );
+  const { rows: affiliates } = await pool.query(
+    "SELECT DISTINCT assigned_source FROM leads WHERE assigned_source IS NOT NULL AND assigned_source <> '' ORDER BY assigned_source"
+  );
+  return {
+    leadSources: sources.map((r) => r.lead_source),
+    assignedSources: affiliates.map((r) => r.assigned_source),
+  };
 }
 
 // ─── Agent CRUD ────────────────────────────────────────────
@@ -422,7 +466,7 @@ module.exports = {
   claimAgentByPincode, countAssignableAgents, findAgentByEmail, findNextAgent, normalizePincode,
   insertLead, updateLeadWhatsapp, getLeadsPendingReassignment, getLeadByLeadId, manualAssignLead,
   markLeadActive, reassignLead, markLeadNoAgent,
-  appendLog, getRecentLogs, getDashboardStats,
+  appendLog, getRecentLogs, getDashboardStats, getLeadsPage, getLeadFilterOptions,
   getAllAgents, addAgent, updateAgent, deleteAgent, deleteAgents, bulkReplaceAgents,
   getAllSourceConfigs, getSourceConfig, upsertSourceConfig, deleteSourceConfig,
   getAllWhatsappTemplateConfigs, getWhatsappTemplateConfig, upsertWhatsappTemplateConfig, deleteWhatsappTemplateConfig,

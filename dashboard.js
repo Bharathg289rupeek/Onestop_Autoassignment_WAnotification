@@ -128,10 +128,15 @@ function getDashboardHTML(baseUrl) {
   <!-- Leads -->
   <div class="tab-panel active" id="panel-leads">
     <div class="toolbar">
-      <select id="leadSourceFilter" onchange="renderLeads()"><option value="">All Sources</option></select>
-      <select id="leadAffiliateFilter" onchange="renderLeads()"><option value="">All Affiliates/Clients</option></select>
-      <input class="search-input" id="leadSearch" placeholder="Search leads..." oninput="renderLeads()">
+      <select id="leadSourceFilter" onchange="onLeadFilterChange()"><option value="">All Sources</option></select>
+      <select id="leadAffiliateFilter" onchange="onLeadFilterChange()"><option value="">All Affiliates/Clients</option></select>
+      <input class="search-input" id="leadSearch" placeholder="Search leads..." oninput="onLeadSearchInput()">
       <button class="btn btn-primary" id="btnBulkAssignLeads" onclick="openBulkAssignModal()" disabled>Bulk Assign Selected (0)</button>
+      <span style="margin-left:auto;display:flex;align-items:center;gap:8px">
+        <span id="leadsPageInfo" style="font-size:12px;color:var(--text2)"></span>
+        <button class="btn btn-sm" id="btnLeadsPrev" onclick="goLeadsPage(-1)">&larr; Prev</button>
+        <button class="btn btn-sm" id="btnLeadsNext" onclick="goLeadsPage(1)">Next &rarr;</button>
+      </span>
     </div>
     <div class="tbl-wrap"><table><thead><tr>
       <th><input type="checkbox" id="leadSelectAll" onchange="toggleAllLeads(this.checked)"></th>
@@ -393,7 +398,7 @@ document.querySelectorAll('.tab').forEach(function(t) {
   });
 });
 
-function loadAll() { loadStats(); loadAgents(); loadSourceConfigs(); }
+function loadAll() { loadStats(); loadLeadsPage(); loadAgents(); loadSourceConfigs(); }
 
 // ── Toast ──
 function toast(msg, type) {
@@ -410,7 +415,7 @@ document.querySelectorAll('.modal-overlay').forEach(function(o) {
   o.addEventListener('click', function(e) { if (e.target === o) o.classList.add('hidden'); });
 });
 
-// ── Stats ──
+// ── Stats ── (aggregate counts only — the leads list itself is paginated separately)
 function loadStats() {
   fetch(API + '/stats').then(function(r) { return r.json(); }).then(function(j) {
     var d = j.data;
@@ -421,31 +426,73 @@ function loadStats() {
     document.getElementById('sActive').textContent = d.active;
     document.getElementById('sWASent').textContent = d.whatsappSent;
     document.getElementById('sWAFail').textContent = d.whatsappFailed;
-    allLeads = d.leads || [];
-    populateLeadFilters();
-    renderLeads();
   }).catch(function(e) { console.error('loadStats', e); });
 }
 
-// ── Leads ──
-function populateLeadFilters() {
-  function fillSelect(id, values) {
-    var sel = document.getElementById(id);
-    var current = sel.value;
-    var defaultOpt = sel.options[0];
-    sel.innerHTML = '';
-    sel.appendChild(defaultOpt);
-    values.forEach(function(v) {
-      var opt = document.createElement('option');
-      opt.value = v; opt.textContent = v;
-      sel.appendChild(opt);
-    });
-    if (values.indexOf(current) !== -1) sel.value = current;
-  }
-  var sources = Array.from(new Set(allLeads.map(function(l) { return l.lead_source; }).filter(Boolean))).sort();
-  var affiliates = Array.from(new Set(allLeads.map(function(l) { return l.assigned_source; }).filter(Boolean))).sort();
-  fillSelect('leadSourceFilter', sources);
-  fillSelect('leadAffiliateFilter', affiliates);
+// ── Leads (server-paginated + server-filtered, so the browser only ever
+// holds one page of rows instead of the whole table) ──
+var leadsPage = 1, leadsPageSize = 50, leadsTotal = 0;
+var leadSearchDebounce = null;
+
+function loadLeadFilterOptions() {
+  fetch(API + '/leads/filter-options').then(function(r) { return r.json(); }).then(function(j) {
+    function fillSelect(id, values) {
+      var sel = document.getElementById(id);
+      var current = sel.value;
+      var defaultOpt = sel.options[0];
+      sel.innerHTML = '';
+      sel.appendChild(defaultOpt);
+      values.forEach(function(v) {
+        var opt = document.createElement('option');
+        opt.value = v; opt.textContent = v;
+        sel.appendChild(opt);
+      });
+      if (values.indexOf(current) !== -1) sel.value = current;
+    }
+    fillSelect('leadSourceFilter', j.data.leadSources || []);
+    fillSelect('leadAffiliateFilter', j.data.assignedSources || []);
+  }).catch(function(e) { console.error('loadLeadFilterOptions', e); });
+}
+
+function onLeadFilterChange() { leadsPage = 1; loadLeadsPage(); }
+
+function onLeadSearchInput() {
+  clearTimeout(leadSearchDebounce);
+  leadSearchDebounce = setTimeout(function() { leadsPage = 1; loadLeadsPage(); }, 350);
+}
+
+function goLeadsPage(delta) {
+  var next = leadsPage + delta;
+  if (next < 1 || (next - 1) * leadsPageSize >= leadsTotal) return;
+  leadsPage = next;
+  loadLeadsPage();
+}
+
+function loadLeadsPage() {
+  var params = new URLSearchParams({ page: leadsPage, pageSize: leadsPageSize });
+  var search = (document.getElementById('leadSearch').value || '').trim();
+  var sourceFilter = document.getElementById('leadSourceFilter').value;
+  var affiliateFilter = document.getElementById('leadAffiliateFilter').value;
+  if (search) params.set('search', search);
+  if (sourceFilter) params.set('lead_source', sourceFilter);
+  if (affiliateFilter) params.set('assigned_source', affiliateFilter);
+
+  fetch(API + '/leads?' + params.toString()).then(function(r) { return r.json(); }).then(function(j) {
+    allLeads = j.data.rows || [];
+    leadsTotal = j.data.total || 0;
+    leadsPage = j.data.page || 1;
+    leadsPageSize = j.data.pageSize || leadsPageSize;
+    renderLeads();
+    updateLeadsPageInfo();
+  }).catch(function(e) { console.error('loadLeadsPage', e); });
+}
+
+function updateLeadsPageInfo() {
+  var totalPages = Math.max(Math.ceil(leadsTotal / leadsPageSize), 1);
+  document.getElementById('leadsPageInfo').textContent =
+    leadsTotal === 0 ? 'No leads' : 'Page ' + leadsPage + ' of ' + totalPages + ' (' + leadsTotal + ' total)';
+  document.getElementById('btnLeadsPrev').disabled = leadsPage <= 1;
+  document.getElementById('btnLeadsNext').disabled = leadsPage >= totalPages;
 }
 
 var selectedLeadIds = new Set();
@@ -454,14 +501,8 @@ var visibleEligibleLeadIds = [];
 function isBulkAssignable(l) { return l.lead_status === 'Unassigned - No Source Config'; }
 
 function renderLeads() {
-  var q = (document.getElementById('leadSearch').value || '').toLowerCase();
-  var sourceFilter = document.getElementById('leadSourceFilter').value;
-  var affiliateFilter = document.getElementById('leadAffiliateFilter').value;
-  var rows = allLeads.filter(function(l) {
-    if (sourceFilter && l.lead_source !== sourceFilter) return false;
-    if (affiliateFilter && l.assigned_source !== affiliateFilter) return false;
-    return !q || JSON.stringify(l).toLowerCase().includes(q);
-  });
+  // allLeads is already the current page, filtered/searched server-side.
+  var rows = allLeads;
   visibleEligibleLeadIds = rows.filter(isBulkAssignable).map(function(l) { return l.lead_id; });
   var b = document.getElementById('leadsBody');
   if (!rows.length) { b.innerHTML = '<tr><td colspan="15" style="text-align:center;padding:30px;color:var(--text2)">No leads found.</td></tr>'; updateBulkAssignButton(); syncLeadSelectAllCheckbox(); return; }
@@ -589,6 +630,7 @@ function saveBulkAssign() {
         closeModal('bulkAssignModal');
         selectedLeadIds.clear();
         loadStats();
+        loadLeadsPage();
       } else toast(j.message || 'Error', 'error');
     }).catch(function(e) { btn.disabled = false; toast(e.message, 'error'); });
 }
@@ -644,7 +686,7 @@ function saveManualAssign() {
   })
     .then(function(r) { return r.json(); }).then(function(j) {
       btn.disabled = false;
-      if (j.code === 200) { selectedLeadIds.delete(leadId); toast('Lead assigned to ' + j.data.assigned_to); closeModal('manualAssignModal'); loadStats(); }
+      if (j.code === 200) { selectedLeadIds.delete(leadId); toast('Lead assigned to ' + j.data.assigned_to); closeModal('manualAssignModal'); loadStats(); loadLeadsPage(); }
       else toast(j.message || 'Error', 'error');
     }).catch(function(e) { btn.disabled = false; toast(e.message, 'error'); });
 }
@@ -1067,6 +1109,8 @@ function fmtDate(d) {
 
 // Initial load
 loadStats();
+loadLeadFilterOptions();
+loadLeadsPage();
 loadSourceConfigs();
 loadAgents();
 </script>

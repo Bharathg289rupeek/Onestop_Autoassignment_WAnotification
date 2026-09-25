@@ -191,4 +191,7 @@ CREATE INDEX IF NOT EXISTS idx_agents_email     ON agents(agent_email);
 CREATE INDEX IF NOT EXISTS idx_leads_status     ON leads(lead_status, activity_checked, reassigned);
 CREATE INDEX IF NOT EXISTS idx_leads_lead_id    ON leads(lead_id);
 CREATE INDEX IF NOT EXISTS idx_leads_source     ON leads(lead_source);
+CREATE INDEX IF NOT EXISTS idx_leads_assigned_source ON leads(assigned_source);
+-- Speeds up the Leads tab's "ORDER BY created_at DESC LIMIT/OFFSET" paging.
+CREATE INDEX IF NOT EXISTS idx_leads_created    ON leads(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_logs_created     ON logs(created_at DESC);
