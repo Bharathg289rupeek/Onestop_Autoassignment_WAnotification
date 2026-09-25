@@ -322,9 +322,12 @@ app.post('/api/leads/bulk-assign', async (req, res) => {
 });
 
 // ─── Stats ──────────────────────────────────────────────────
-app.get('/api/stats', async (_, res) => {
-  try { return res.json({ code: 200, data: await db.getDashboardStats() }); }
-  catch (e) { console.error('[stats]', e); return res.status(500).json({ code: 500, message: e.message }); }
+app.get('/api/stats', async (req, res) => {
+  try {
+    const { search, lead_source, assigned_source } = req.query;
+    const data = await db.getDashboardStats({ search, leadSource: lead_source, assignedSource: assigned_source });
+    return res.json({ code: 200, data });
+  } catch (e) { console.error('[stats]', e); return res.status(500).json({ code: 500, message: e.message }); }
 });
 
 // Paginated + filtered leads for the Leads tab (replaces shipping the whole

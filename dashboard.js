@@ -416,8 +416,21 @@ document.querySelectorAll('.modal-overlay').forEach(function(o) {
 });
 
 // ── Stats ── (aggregate counts only — the leads list itself is paginated separately)
+// Reads the Leads tab's current search/source/affiliate filters, shared by
+// loadStats() (stat tiles) and loadLeadsPage() (table) so they always agree.
+function currentLeadFilterParams() {
+  var params = new URLSearchParams();
+  var search = (document.getElementById('leadSearch').value || '').trim();
+  var sourceFilter = document.getElementById('leadSourceFilter').value;
+  var affiliateFilter = document.getElementById('leadAffiliateFilter').value;
+  if (search) params.set('search', search);
+  if (sourceFilter) params.set('lead_source', sourceFilter);
+  if (affiliateFilter) params.set('assigned_source', affiliateFilter);
+  return params;
+}
+
 function loadStats() {
-  fetch(API + '/stats').then(function(r) { return r.json(); }).then(function(j) {
+  fetch(API + '/stats?' + currentLeadFilterParams().toString()).then(function(r) { return r.json(); }).then(function(j) {
     var d = j.data;
     document.getElementById('sTotal').textContent = d.total;
     document.getElementById('sAssigned').textContent = d.assigned;
@@ -454,11 +467,11 @@ function loadLeadFilterOptions() {
   }).catch(function(e) { console.error('loadLeadFilterOptions', e); });
 }
 
-function onLeadFilterChange() { leadsPage = 1; loadLeadsPage(); }
+function onLeadFilterChange() { leadsPage = 1; loadLeadsPage(); loadStats(); }
 
 function onLeadSearchInput() {
   clearTimeout(leadSearchDebounce);
-  leadSearchDebounce = setTimeout(function() { leadsPage = 1; loadLeadsPage(); }, 350);
+  leadSearchDebounce = setTimeout(function() { leadsPage = 1; loadLeadsPage(); loadStats(); }, 350);
 }
 
 function goLeadsPage(delta) {
@@ -469,13 +482,9 @@ function goLeadsPage(delta) {
 }
 
 function loadLeadsPage() {
-  var params = new URLSearchParams({ page: leadsPage, pageSize: leadsPageSize });
-  var search = (document.getElementById('leadSearch').value || '').trim();
-  var sourceFilter = document.getElementById('leadSourceFilter').value;
-  var affiliateFilter = document.getElementById('leadAffiliateFilter').value;
-  if (search) params.set('search', search);
-  if (sourceFilter) params.set('lead_source', sourceFilter);
-  if (affiliateFilter) params.set('assigned_source', affiliateFilter);
+  var params = currentLeadFilterParams();
+  params.set('page', leadsPage);
+  params.set('pageSize', leadsPageSize);
 
   fetch(API + '/leads?' + params.toString()).then(function(r) { return r.json(); }).then(function(j) {
     allLeads = j.data.rows || [];

@@ -213,30 +213,9 @@ async function getRecentLogs(limit) {
 // which got slow as the table grew. See getLeadsPage() for the paginated,
 // filtered list the Leads tab actually renders.
 
-async function getDashboardStats() {
-  const { rows } = await pool.query(`
-    SELECT
-      COUNT(*)::int AS total,
-      COUNT(*) FILTER (WHERE lead_status = 'Assigned')::int AS assigned,
-      COUNT(*) FILTER (WHERE assigned_agent_id IS NULL)::int AS unassigned,
-      COUNT(*) FILTER (WHERE reassigned = true)::int AS reassigned,
-      COUNT(*) FILTER (WHERE lead_status = 'Active')::int AS active,
-      (COUNT(*) FILTER (WHERE whatsapp_p0_status = 'Sent') + COUNT(*) FILTER (WHERE whatsapp_p1_status = 'Sent'))::int AS whatsapp_sent,
-      (COUNT(*) FILTER (WHERE whatsapp_p0_status = 'Failed') + COUNT(*) FILTER (WHERE whatsapp_p1_status = 'Failed'))::int AS whatsapp_failed
-    FROM leads
-  `);
-  const s = rows[0];
-  return {
-    total: s.total, assigned: s.assigned, unassigned: s.unassigned, reassigned: s.reassigned,
-    active: s.active, whatsappSent: s.whatsapp_sent, whatsappFailed: s.whatsapp_failed,
-  };
-}
-
-const LEADS_PAGE_SIZE_DEFAULT = 50;
-const LEADS_PAGE_SIZE_MAX = 200;
-
-/** Paginated + filtered leads for the Leads tab table. */
-async function getLeadsPage({ page, pageSize, search, leadSource, assignedSource }) {
+/** Shared by getDashboardStats() and getLeadsPage() so the stat tiles and
+ * the table always agree on what "the current filters" match. */
+function buildLeadFilterWhere({ search, leadSource, assignedSource }) {
   const conditions = [];
   const params = [];
   let i = 1;
@@ -252,7 +231,36 @@ async function getLeadsPage({ page, pageSize, search, leadSource, assignedSource
     params.push('%' + search + '%');
     i++;
   }
-  const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+  return { where: conditions.length ? 'WHERE ' + conditions.join(' AND ') : '', params, nextIndex: i };
+}
+
+async function getDashboardStats(filters) {
+  const { where, params } = buildLeadFilterWhere(filters || {});
+  const { rows } = await pool.query(`
+    SELECT
+      COUNT(*)::int AS total,
+      COUNT(*) FILTER (WHERE lead_status = 'Assigned')::int AS assigned,
+      COUNT(*) FILTER (WHERE assigned_agent_id IS NULL)::int AS unassigned,
+      COUNT(*) FILTER (WHERE reassigned = true)::int AS reassigned,
+      COUNT(*) FILTER (WHERE lead_status = 'Active')::int AS active,
+      (COUNT(*) FILTER (WHERE whatsapp_p0_status = 'Sent') + COUNT(*) FILTER (WHERE whatsapp_p1_status = 'Sent'))::int AS whatsapp_sent,
+      (COUNT(*) FILTER (WHERE whatsapp_p0_status = 'Failed') + COUNT(*) FILTER (WHERE whatsapp_p1_status = 'Failed'))::int AS whatsapp_failed
+    FROM leads ${where}
+  `, params);
+  const s = rows[0];
+  return {
+    total: s.total, assigned: s.assigned, unassigned: s.unassigned, reassigned: s.reassigned,
+    active: s.active, whatsappSent: s.whatsapp_sent, whatsappFailed: s.whatsapp_failed,
+  };
+}
+
+const LEADS_PAGE_SIZE_DEFAULT = 50;
+const LEADS_PAGE_SIZE_MAX = 200;
+
+/** Paginated + filtered leads for the Leads tab table. */
+async function getLeadsPage({ page, pageSize, search, leadSource, assignedSource }) {
+  const { where, params, nextIndex } = buildLeadFilterWhere({ search, leadSource, assignedSource });
+  let i = nextIndex;
 
   const { rows: countRows } = await pool.query(`SELECT COUNT(*)::int AS n FROM leads ${where}`, params);
   const total = countRows[0].n;
