@@ -132,6 +132,7 @@ function getDashboardHTML(baseUrl) {
       <select id="leadAffiliateFilter" onchange="onLeadFilterChange()"><option value="">All Affiliates/Clients</option></select>
       <input class="search-input" id="leadSearch" placeholder="Search leads..." oninput="onLeadSearchInput()">
       <button class="btn btn-primary" id="btnBulkAssignLeads" onclick="openBulkAssignModal()" disabled>Bulk Assign Selected (0)</button>
+      <button class="btn" onclick="openUploadLeadsModal()">&#8593; Upload Leads CSV</button>
       <span style="margin-left:auto;display:flex;align-items:center;gap:8px">
         <span id="leadsPageInfo" style="font-size:12px;color:var(--text2)"></span>
         <button class="btn btn-sm" id="btnLeadsPrev" onclick="goLeadsPage(-1)">&larr; Prev</button>
@@ -344,6 +345,39 @@ function getDashboardHTML(baseUrl) {
   </div>
 </div>
 
+<!-- Modal: Upload Leads CSV -->
+<div class="modal-overlay hidden" id="uploadLeadsModal">
+  <div class="modal">
+    <h2>Upload Leads CSV</h2>
+    <div class="info-box" style="font-size:12px">
+      <strong>CSV format:</strong> <code>phone, name, loan_amount, loan_type</code> (required) + <code>lead_id, pincode, city, branch_id, lead_source, assigned_source</code> (optional). Each row is recorded, then assigned right away using the settings below — same as bulk-assigning an unassigned lead. Leave Lead Source / Affiliate/Client blank to use each row's own column values. Runs in the background at the rate below; check the Logs tab for progress.
+    </div>
+    <div class="form-group"><label>CSV File *</label><input type="file" id="ulFile" accept=".csv"></div>
+    <div class="form-group"><label>Use an existing Source Config (optional)</label>
+      <select id="ulUseConfig" onchange="applyUploadLeadsConfig()"><option value="">— pick to auto-fill —</option></select>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Lead Source override</label><input id="ulLeadSource" placeholder="leave blank = use each row's own"></div>
+      <div class="form-group"><label>Affiliate/Client override</label><input id="ulAssignedSource" placeholder="leave blank = use each row's own"></div>
+    </div>
+    <div class="form-group"><label>Assign to this agent in OneStop (optional)</label>
+      <select id="ulForceAgent"><option value="">— pincode round robin (default) —</option></select>
+    </div>
+    <div class="form-row">
+      <div class="form-group"><label>Send WhatsApp</label>
+        <select id="ulSendWhatsapp"><option value="true">Yes</option><option value="false">No</option></select>
+      </div>
+      <div class="form-group"><label>Priority (sent to OneStop) *</label><input id="ulPriorityScore" type="number" step="0.1" min="0" max="10" value="9.9"></div>
+    </div>
+    <div class="form-group"><label>OneStop leadSource (applies to all uploaded leads)</label><input id="ulOneStopLeadSource" placeholder="leave blank = b2c (default)"></div>
+    <div class="form-group"><label>Rate — leads assigned per minute</label><input id="ulRatePerMinute" type="number" step="1" min="0" placeholder="0 = no limit, assign as fast as possible"></div>
+    <div class="form-actions">
+      <button class="btn" onclick="closeModal('uploadLeadsModal')">Cancel</button>
+      <button class="btn btn-primary" id="btnUploadLeads" onclick="saveUploadLeads()">Upload &amp; Assign</button>
+    </div>
+  </div>
+</div>
+
 <!-- Modal: Add/Edit WA Template Config -->
 <div class="modal-overlay hidden" id="waTemplateModal">
   <div class="modal">
@@ -507,7 +541,9 @@ function updateLeadsPageInfo() {
 var selectedLeadIds = new Set();
 var visibleEligibleLeadIds = [];
 
-function isBulkAssignable(l) { return l.lead_status === 'Unassigned - No Source Config'; }
+function isBulkAssignable(l) {
+  return l.lead_status === 'Unassigned - No Source Config' || l.lead_status === 'Unassigned - CSV Upload';
+}
 
 function renderLeads() {
   // allLeads is already the current page, filtered/searched server-side.
@@ -641,6 +677,81 @@ function saveBulkAssign() {
         loadStats();
         loadLeadsPage();
       } else toast(j.message || 'Error', 'error');
+    }).catch(function(e) { btn.disabled = false; toast(e.message, 'error'); });
+}
+
+// ── Upload Leads CSV (record + assign each row, same options as bulk-assign) ──
+function openUploadLeadsModal() {
+  document.getElementById('ulFile').value = '';
+  document.getElementById('ulLeadSource').value = '';
+  document.getElementById('ulAssignedSource').value = '';
+  document.getElementById('ulSendWhatsapp').value = 'true';
+  document.getElementById('ulPriorityScore').value = 9.9;
+  document.getElementById('ulOneStopLeadSource').value = '';
+  document.getElementById('ulRatePerMinute').value = '';
+
+  var sel = document.getElementById('ulUseConfig');
+  sel.innerHTML = '<option value="">— pick to auto-fill —</option>';
+  allSources.forEach(function(s) {
+    var opt = document.createElement('option');
+    opt.value = s.id;
+    opt.textContent = s.lead_source + ' / ' + (s.assigned_source || '— all —');
+    sel.appendChild(opt);
+  });
+
+  var agentSel = document.getElementById('ulForceAgent');
+  agentSel.innerHTML = '<option value="">— pincode round robin (default) —</option>';
+  allAgents.filter(function(a) { return a.is_active; }).forEach(function(a) {
+    var opt = document.createElement('option');
+    opt.value = a.agent_email;
+    opt.textContent = a.agent_name + ' (' + a.agent_email + ')';
+    agentSel.appendChild(opt);
+  });
+
+  document.getElementById('uploadLeadsModal').classList.remove('hidden');
+}
+
+function applyUploadLeadsConfig() {
+  var id = document.getElementById('ulUseConfig').value;
+  if (!id) return;
+  var s = allSources.find(function(x) { return String(x.id) === id; });
+  if (!s) return;
+  document.getElementById('ulLeadSource').value = s.lead_source;
+  document.getElementById('ulAssignedSource').value = s.assigned_source || '';
+  document.getElementById('ulSendWhatsapp').value = s.send_whatsapp === false ? 'false' : 'true';
+  document.getElementById('ulPriorityScore').value = s.priority_score != null ? s.priority_score : 9.9;
+}
+
+function saveUploadLeads() {
+  var btn = document.getElementById('btnUploadLeads');
+  var file = document.getElementById('ulFile').files[0];
+  if (!file) return toast('Choose a CSV file first', 'error');
+  var priority_score = parseFloat(document.getElementById('ulPriorityScore').value);
+  var rateRaw = document.getElementById('ulRatePerMinute').value.trim();
+  var rate_per_minute = rateRaw === '' ? 0 : parseFloat(rateRaw);
+  if (isNaN(priority_score)) return toast('Priority must be a number', 'error');
+  if (isNaN(rate_per_minute) || rate_per_minute < 0) return toast('Rate per minute must be 0 or a positive number', 'error');
+
+  var fd = new FormData();
+  fd.append('file', file);
+  fd.append('lead_source', document.getElementById('ulLeadSource').value.trim());
+  fd.append('assigned_source', document.getElementById('ulAssignedSource').value.trim());
+  fd.append('agent_email', document.getElementById('ulForceAgent').value);
+  fd.append('send_whatsapp', document.getElementById('ulSendWhatsapp').value);
+  fd.append('priority_score', priority_score);
+  fd.append('onestop_lead_source', document.getElementById('ulOneStopLeadSource').value.trim());
+  fd.append('rate_per_minute', rate_per_minute);
+
+  btn.disabled = true;
+  fetch(API + '/leads/upload-csv', { method: 'POST', body: fd })
+    .then(function(r) { return r.json(); }).then(function(j) {
+      btn.disabled = false;
+      if (j.code === 200) {
+        toast(j.message);
+        closeModal('uploadLeadsModal');
+        loadStats();
+        loadLeadsPage();
+      } else toast(j.message || 'Upload failed', 'error');
     }).catch(function(e) { btn.disabled = false; toast(e.message, 'error'); });
 }
 

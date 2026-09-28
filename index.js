@@ -321,6 +321,104 @@ app.post('/api/leads/bulk-assign', async (req, res) => {
   } catch (e) { return res.status(500).json({ code: 500, message: e.message }); }
 });
 
+// ─── Upload a CSV of new leads and assign them ───────────────────────────
+// Each row is recorded (like a normal webhook lead) then immediately run
+// through the same manuallyAssignLead() path as bulk-assign, with the same
+// operator-chosen priority/WhatsApp/forced-agent/rate options — this is the
+// CSV-import equivalent of "receive lead, then bulk-assign it".
+app.post('/api/leads/upload-csv', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ code: 400, message: 'No file uploaded' });
+    const csvText = req.file.buffer.toString('utf-8');
+    const rows = parseCSV(csvText);
+    if (rows.length === 0) return res.status(400).json({ code: 400, message: 'CSV is empty or has no data rows' });
+    const first = rows[0];
+    const requiredCols = ['phone', 'name', 'loan_amount', 'loan_type'];
+    const missingCols = requiredCols.filter((c) => !(c in first));
+    if (missingCols.length > 0) {
+      return res.status(400).json({
+        code: 400,
+        message: 'CSV missing columns: ' + missingCols.join(', '),
+        hint: 'Required: phone, name, loan_amount, loan_type. Optional: lead_id, pincode, city, branch_id, lead_source, assigned_source',
+      });
+    }
+
+    const overrideSource = req.body.lead_source ? String(req.body.lead_source).trim() : '';
+    const overrideAffiliate = req.body.assigned_source != null && req.body.assigned_source !== '' ? String(req.body.assigned_source).trim() : null;
+
+    const priorityScore = req.body.priority_score != null && req.body.priority_score !== '' ? parseFloat(req.body.priority_score) : 9.9;
+    if (Number.isNaN(priorityScore)) return res.status(400).json({ code: 400, message: 'priority_score must be a number' });
+    // FormData sends booleans as the strings "true"/"false".
+    const sendWhatsapp = req.body.send_whatsapp !== 'false';
+    const oneStopLeadSource = req.body.onestop_lead_source ? String(req.body.onestop_lead_source).trim() : undefined;
+
+    const ratePerMinute = req.body.rate_per_minute != null && req.body.rate_per_minute !== '' ? parseFloat(req.body.rate_per_minute) : 0;
+    if (Number.isNaN(ratePerMinute) || ratePerMinute < 0) {
+      return res.status(400).json({ code: 400, message: 'rate_per_minute must be a non-negative number (0 = no limit)' });
+    }
+    const delayMs = ratePerMinute > 0 ? Math.ceil(60000 / ratePerMinute) : 0;
+
+    let forcedAgent = null;
+    if (req.body.agent_email) {
+      forcedAgent = await db.findAgentByEmail(req.body.agent_email);
+      if (!forcedAgent) return res.status(400).json({ code: 400, message: 'agent_email not found or inactive: ' + req.body.agent_email });
+    }
+
+    const total = rows.length;
+
+    (async () => {
+      let assigned = 0, failed = 0;
+      for (const row of rows) {
+        const rowLeadId = row.lead_id || generateLeadId();
+        try {
+          if (!row.phone || !row.name || !row.loan_amount || !row.loan_type) {
+            failed++;
+            await db.appendLog('CSV_UPLOAD', rowLeadId, row.phone || '', 'Row missing phone/name/loan_amount/loan_type — skipped', 'FAILED');
+            if (delayMs > 0) await sleep(delayMs);
+            continue;
+          }
+
+          const phone = String(row.phone).trim();
+          const pincode = db.normalizePincode(row.pincode);
+          const lead_source = overrideSource || row.lead_source || '';
+          const assigned_source = overrideAffiliate != null ? overrideAffiliate : (row.assigned_source || '');
+          const externalId = buildExternalId(lead_source, assigned_source, phone);
+
+          const baseLead = {
+            lead_id: rowLeadId, phone, name: row.name, loan_amount: row.loan_amount,
+            branch_id: row.branch_id || null, city: row.city || null, pincode: pincode || null,
+            loan_type: row.loan_type, lead_source, external_id: externalId,
+            assigned_source: assigned_source || null,
+          };
+
+          const insertedLead = await db.insertLead({ ...baseLead, lead_status: 'Unassigned - CSV Upload' });
+
+          if (!lead_source) {
+            failed++;
+            await db.appendLog('CSV_UPLOAD', rowLeadId, phone, 'No lead_source on the row or override — recorded but not assigned', 'FAILED');
+          } else {
+            const result = await manuallyAssignLead(insertedLead, { lead_source, assigned_source, priorityScore, sendWhatsapp, forcedAgent, oneStopLeadSource });
+            if (result.ok) assigned++;
+            else { failed++; await db.appendLog('CSV_UPLOAD', rowLeadId, phone, result.message, 'FAILED'); }
+          }
+        } catch (err) {
+          failed++;
+          await db.appendLog('CSV_UPLOAD', rowLeadId, row.phone || '', 'CSV row error: ' + err.message, 'FAILED');
+        }
+        if (delayMs > 0) await sleep(delayMs);
+      }
+      await db.appendLog('CSV_UPLOAD', '', '',
+        'CSV upload finished: ' + assigned + ' assigned, ' + failed + ' failed (of ' + total + ')', 'SUCCESS');
+    })().catch((err) => console.error('[csvUploadLeads] Fatal:', err));
+
+    return res.json({
+      code: 200,
+      message: 'Started uploading ' + total + ' lead(s) from CSV' + (ratePerMinute > 0 ? ' at ' + ratePerMinute + '/min' : ' (no rate limit)'),
+      data: { total, ratePerMinute },
+    });
+  } catch (e) { return res.status(500).json({ code: 500, message: e.message }); }
+});
+
 // ─── Stats ──────────────────────────────────────────────────
 app.get('/api/stats', async (req, res) => {
   try {
