@@ -98,6 +98,76 @@ async function countAssignableAgents(pincode) {
   return rows[0].n;
 }
 
+/** City for a pincode, via the pincode_city_map fallback table, or null. */
+async function getCityForPincode(pincode) {
+  const pin = normalizePincode(pincode);
+  if (!pin) return null;
+  const { rows } = await pool.query('SELECT city FROM pincode_city_map WHERE pincode = $1', [pin]);
+  return rows[0]?.city || null;
+}
+
+/**
+ * Same round-robin claim as claimAgentByPincode, but by city instead —
+ * the fallback when no agent is assignable for the lead's exact pincode.
+ * "Assignable" = is_active AND city_identifier = 'assign' AND city matches
+ * (case-insensitive, since the pincode->city map and agents.city may not
+ * agree on capitalization).
+ */
+async function claimAgentByCity(city, excludeAgentId) {
+  const c = (city || '').trim();
+  if (!c) return null;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', ['rr:city:' + c.toLowerCase()]);
+
+    const { rows } = await client.query(
+      `SELECT id FROM agents
+        WHERE LOWER(TRIM(city)) = LOWER($1)
+          AND city_identifier = 'assign'
+          AND is_active = true
+          AND ($2::int IS NULL OR id <> $2::int)
+        ORDER BY last_assigned_at ASC NULLS FIRST, assign_count ASC, id ASC
+        LIMIT 1`,
+      [c, excludeAgentId || null]
+    );
+
+    if (!rows.length) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+
+    const claimed = await client.query(
+      `UPDATE agents
+          SET last_assigned_at = clock_timestamp(),
+              assign_count     = assign_count + 1,
+              updated_at       = NOW()
+        WHERE id = $1
+      RETURNING *`,
+      [rows[0].id]
+    );
+    await client.query('COMMIT');
+    return claimed.rows[0] || null;
+  } catch (err) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** How many agents are assignable in this city (for clearer error messages). */
+async function countAssignableAgentsByCity(city) {
+  const c = (city || '').trim();
+  if (!c) return 0;
+  const { rows } = await pool.query(
+    "SELECT COUNT(*)::int AS n FROM agents WHERE LOWER(TRIM(city)) = LOWER($1) AND city_identifier = 'assign' AND is_active = true",
+    [c]
+  );
+  return rows[0].n;
+}
+
 // Find a specific agent by email (for forced assignment via assigned_agent field)
 async function findAgentByEmail(email) {
   const { rows } = await pool.query(
@@ -109,7 +179,10 @@ async function findAgentByEmail(email) {
 
 /** Next agent in the pincode rotation for a reassignment, excluding the current one. */
 async function findNextAgent(lead, currentAgentId) {
-  return claimAgentByPincode(lead.pincode, currentAgentId);
+  const byPincode = await claimAgentByPincode(lead.pincode, currentAgentId);
+  if (byPincode) return byPincode;
+  const city = await getCityForPincode(lead.pincode);
+  return city ? claimAgentByCity(city, currentAgentId) : null;
 }
 
 // ─── Lead Operations ───────────────────────────────────────
@@ -472,6 +545,7 @@ async function bulkSetSystemConfig(entries) {
 
 module.exports = {
   claimAgentByPincode, countAssignableAgents, findAgentByEmail, findNextAgent, normalizePincode,
+  getCityForPincode, claimAgentByCity, countAssignableAgentsByCity,
   insertLead, updateLeadWhatsapp, getLeadsPendingReassignment, getLeadByLeadId, manualAssignLead,
   markLeadActive, reassignLead, markLeadNoAgent,
   appendLog, getRecentLogs, getDashboardStats, getLeadsPage, getLeadFilterOptions,

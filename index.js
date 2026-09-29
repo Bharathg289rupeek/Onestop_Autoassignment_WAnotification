@@ -89,18 +89,34 @@ app.post('/api/receive-lead', async (req, res) => {
 
       // RULE 2 + 3: assignable agent in that pincode, picked round robin.
       agent = await db.claimAgentByPincode(pincode, null);
-      if (!agent) {
-        const n = await db.countAssignableAgents(pincode);
-        const reason = n === 0 ? 'NO_AGENT_IN_PINCODE' : 'ALL_AGENTS_BUSY';
-        await db.insertLead({ ...baseLead, lead_status: 'Unassigned - No Agent In Pincode' });
-        await db.appendLog('NOT_ASSIGNED', leadId, phone,
-          'No assignable agent for pincode ' + pincode + ' (' + reason + ')', 'FAILED');
-        return res.status(200).json({
-          code: 200, message: 'Lead recorded but not assigned — no agent in pincode ' + pincode,
-          data: { lead_id: leadId, assigned: false, reason, pincode },
-        });
+      if (agent) {
+        console.log('[receiveLead] Round robin picked ' + agent.agent_email + ' for pin ' + pincode);
+      } else {
+        // Fallback: no agent covers this exact pincode -> try the pincode's
+        // mapped city instead. Leads only ever carry a pincode, never a
+        // city, so the city is looked up from pincode_city_map.
+        const fallbackCity = await db.getCityForPincode(pincode);
+        if (fallbackCity) {
+          agent = await db.claimAgentByCity(fallbackCity, null);
+          if (agent) {
+            mode = 'city_round_robin';
+            console.log('[receiveLead] No pincode agent for ' + pincode + ' — city round robin picked ' + agent.agent_email + ' for city ' + fallbackCity);
+          }
+        }
+
+        if (!agent) {
+          const n = await db.countAssignableAgents(pincode);
+          const reason = n === 0 ? 'NO_AGENT_IN_PINCODE' : 'ALL_AGENTS_BUSY';
+          await db.insertLead({ ...baseLead, lead_status: 'Unassigned - No Agent In Pincode' });
+          await db.appendLog('NOT_ASSIGNED', leadId, phone,
+            'No assignable agent for pincode ' + pincode + ' (' + reason + ')' +
+            (fallbackCity ? ', nor for its mapped city ' + fallbackCity : ' — pincode has no city mapping either'), 'FAILED');
+          return res.status(200).json({
+            code: 200, message: 'Lead recorded but not assigned — no agent in pincode ' + pincode,
+            data: { lead_id: leadId, assigned: false, reason, pincode },
+          });
+        }
       }
-      console.log('[receiveLead] Round robin picked ' + agent.agent_email + ' for pin ' + pincode);
     }
 
     const assignResult = await onestop.assignLead(baseLead, agent, priorityScore);
@@ -202,9 +218,17 @@ async function manuallyAssignLead(lead, { lead_source, assigned_source, priority
     if (!lead.pincode) return { ok: false, status: 400, message: 'Lead has no pincode — cannot round-robin assign' };
     agent = await db.claimAgentByPincode(lead.pincode, null);
     if (!agent) {
-      const n = await db.countAssignableAgents(lead.pincode);
-      const reason = n === 0 ? 'NO_AGENT_IN_PINCODE' : 'ALL_AGENTS_BUSY';
-      return { ok: false, status: 409, message: 'No assignable agent in pincode ' + lead.pincode + ' (' + reason + ')' };
+      const fallbackCity = await db.getCityForPincode(lead.pincode);
+      if (fallbackCity) agent = await db.claimAgentByCity(fallbackCity, null);
+      if (!agent) {
+        const n = await db.countAssignableAgents(lead.pincode);
+        const reason = n === 0 ? 'NO_AGENT_IN_PINCODE' : 'ALL_AGENTS_BUSY';
+        return {
+          ok: false, status: 409,
+          message: 'No assignable agent in pincode ' + lead.pincode + ' (' + reason + ')' +
+            (fallbackCity ? ', nor for its mapped city ' + fallbackCity : ' — pincode has no city mapping either'),
+        };
+      }
     }
   }
 

@@ -159,7 +159,7 @@ function getDashboardHTML(baseUrl) {
       <input class="search-input" id="agentSearch" placeholder="Search agents..." oninput="renderAgents()">
     </div>
     <div class="info-box">
-      <strong>Assignment is pincode-only, round robin.</strong> An agent takes leads only if <code>pincode</code> is set, <code>pincode_identifier = assign</code>, and Active = Yes. Within a pincode the least-recently-assigned agent goes next, so load spreads evenly — there is no priority ordering. <code>branch_id</code> / <code>city</code> are stored for reference but no longer affect assignment.<br>
+      <strong>Assignment is pincode round robin, with a city fallback.</strong> An agent takes leads if <code>pincode</code> matches, <code>pincode_identifier = assign</code>, and Active = Yes. If no agent matches the exact pincode, the lead falls back to <code>city</code> round robin (leads only carry a pincode, so the city is looked up from a pincode→city map) among agents with <code>city_identifier = assign</code>. Within either rotation the least-recently-assigned agent goes next — there is no priority ordering. <code>branch_id</code> is stored for reference only.<br>
       <strong>CSV format:</strong> <code>branch_id, agent_email, agent_name, agent_phone</code> (required) + <code>city, pincode, city_identifier, pincode_identifier</code> (optional). Upload replaces <strong>all</strong> agents and resets the rotation.
     </div>
     <div class="tbl-wrap"><table><thead><tr>

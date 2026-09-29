@@ -119,6 +119,13 @@ CREATE TABLE IF NOT EXISTS logs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Pincode -> city fallback mapping. Only consulted when no agent is
+-- assignable for the lead's exact pincode; seeded from pincode_city_seed.sql.
+CREATE TABLE IF NOT EXISTS pincode_city_map (
+  pincode VARCHAR(20) PRIMARY KEY,
+  city VARCHAR(100) NOT NULL
+);
+
 -- ── Round-robin tracking (added for pincode-only assignment) ──
 -- Safe to re-run: these are no-ops once the columns exist.
 ALTER TABLE agents ADD COLUMN IF NOT EXISTS last_assigned_at TIMESTAMPTZ;
