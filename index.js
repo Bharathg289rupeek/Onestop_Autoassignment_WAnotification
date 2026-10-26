@@ -19,6 +19,12 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 *
 // ─── Health ─────────────────────────────────────────────────
 app.get('/health', (_, res) => res.json({ status: 'ok', time: new Date().toISOString() }));
 
+// ─── OneStop connectivity check (troubleshooting 403s) ──────
+app.get('/api/diagnostics/onestop', async (_, res) => {
+  try { return res.json({ code: 200, data: await onestop.diagnose() }); }
+  catch (e) { return res.status(500).json({ code: 500, message: e.message }); }
+});
+
 // ─── Receive Lead (webhook) ─────────────────────────────────
 app.post('/api/receive-lead', async (req, res) => {
   try {

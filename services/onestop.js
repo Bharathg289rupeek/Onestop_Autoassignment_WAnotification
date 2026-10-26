@@ -80,4 +80,32 @@ async function updateAssignment(leadId, newAgent) {
   }
 }
 
-module.exports = { assignLead, getLeadDetails, updateAssignment };
+/**
+ * Read-only connectivity check for troubleshooting 403s: reports this
+ * server's outbound IP and what the OneStop gateway answers a harmless GET
+ * (lookup of a phone that doesn't exist) with the real JWT.
+ *   - HTML 403 page      -> blocked in front of the API (IP allowlist / WAF)
+ *   - JSON 403/401       -> reached the API, JWT rejected
+ *   - 200                -> working
+ */
+async function diagnose() {
+  let egressIp = null;
+  try { egressIp = (await axios.get('https://api.ipify.org', { timeout: 8000 })).data; } catch (_) {}
+
+  try {
+    const params = new URLSearchParams({ assignedTo: 'diagnostic@invalid.local', phone: '0000000000' });
+    const r = await onestopClient.get(`/meetingBubbleLeadsV2?${params.toString()}`, { validateStatus: () => true });
+    const contentType = String(r.headers['content-type'] || '');
+    const bodyText = typeof r.data === 'string' ? r.data : JSON.stringify(r.data);
+    const isHtml = contentType.includes('html') || /^\s*<html/i.test(bodyText);
+    let verdict;
+    if (r.status === 200) verdict = 'OK — OneStop reachable and JWT accepted';
+    else if (isHtml) verdict = 'BLOCKED BEFORE THE API — HTML error page from the gateway/WAF; ask infra to allow this server\'s outbound IP';
+    else verdict = 'Reached the API but it rejected the request (HTTP ' + r.status + ') — check ONESTOP_JWT';
+    return { egressIp, status: r.status, contentType, bodySnippet: bodyText.slice(0, 200), verdict };
+  } catch (err) {
+    return { egressIp, status: null, error: err.message, verdict: 'Could not reach OneStop at all: ' + err.message };
+  }
+}
+
+module.exports = { assignLead, getLeadDetails, updateAssignment, diagnose };
