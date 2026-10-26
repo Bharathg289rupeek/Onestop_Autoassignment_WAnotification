@@ -37,8 +37,15 @@ async function assignLead(lead, agent, priorityScore, oneStopLeadSource) {
       success ? 'SUCCESS' : 'FAILED');
     return { success, message: response.data.message, data: response.data };
   } catch (err) {
-    const errMsg = err.response?.data?.message || err.message;
-    await db.appendLog('ONESTOP_ASSIGN', lead.lead_id, lead.phone, `Failed: ${errMsg}`, 'FAILED');
+    // axios' default "Request failed with status code 403" hides the cause —
+    // include the HTTP status and the response body OneStop actually sent.
+    const status = err.response?.status;
+    const body = err.response?.data;
+    const errMsg = body?.message || err.message;
+    const detail = status
+      ? ` [HTTP ${status}] ${typeof body === 'string' ? body : JSON.stringify(body)}`.slice(0, 300)
+      : '';
+    await db.appendLog('ONESTOP_ASSIGN', lead.lead_id, lead.phone, `Failed: ${errMsg}${detail}`, 'FAILED');
     return { success: false, message: errMsg, data: null };
   }
 }
