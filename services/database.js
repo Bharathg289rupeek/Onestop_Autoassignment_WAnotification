@@ -228,6 +228,7 @@ async function manualAssignLead(leadId, agent, overrides) {
     `UPDATE leads SET
        assigned_agent_id = $1, assigned_email = $2, assigned_name = $3, assigned_phone = $4,
        assigned_at = NOW(), lead_status = 'Assigned', onestop_lead_id = $5,
+       activity_checked = false, reassigned = false, call_count = 0,
        lead_source = $6, assigned_source = $7, external_id = $8, last_updated = NOW()
      WHERE lead_id = $9
      RETURNING *`,

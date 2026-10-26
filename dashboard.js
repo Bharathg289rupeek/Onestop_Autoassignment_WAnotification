@@ -542,7 +542,8 @@ var selectedLeadIds = new Set();
 var visibleEligibleLeadIds = [];
 
 function isBulkAssignable(l) {
-  return l.lead_status === 'Unassigned - No Source Config' || l.lead_status === 'Unassigned - CSV Upload';
+  return l.lead_status === 'Unassigned - No Source Config' || l.lead_status === 'Unassigned - CSV Upload' ||
+    l.lead_status === 'Unassigned - OneStop Failed';
 }
 
 function renderLeads() {

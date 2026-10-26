@@ -121,6 +121,19 @@ app.post('/api/receive-lead', async (req, res) => {
 
     const assignResult = await onestop.assignLead(baseLead, agent, priorityScore);
 
+    // OneStop rejected it: don't record the lead as assigned or message the
+    // agent about a lead that isn't in OneStop. Keep it as an unassigned
+    // lead so it can be retried from the dashboard's Assign button.
+    if (!assignResult.success) {
+      await db.insertLead({ ...baseLead, lead_status: 'Unassigned - OneStop Failed' });
+      await db.appendLog('NOT_ASSIGNED', leadId, phone,
+        'OneStop assignment to ' + agent.agent_email + ' failed — lead kept unassigned, WhatsApp skipped (' + assignResult.message + ')', 'FAILED');
+      return res.status(200).json({
+        code: 200, message: 'Lead recorded but not assigned — OneStop assignment failed',
+        data: { lead_id: leadId, assigned: false, reason: 'ONESTOP_FAILED', pincode: pincode || null },
+      });
+    }
+
     await db.insertLead({
       ...baseLead,
       agent_id: agent.id, agent_email: agent.agent_email, agent_name: agent.agent_name,
@@ -180,7 +193,13 @@ app.post('/api/check-reassignment', async (req, res) => {
           results.errors++;
           continue;
         }
-        await onestop.updateAssignment(lead.onestop_lead_id || lead.external_id || lead.lead_id, nextAgent);
+        const reassignResult = await onestop.updateAssignment(lead.onestop_lead_id || lead.external_id || lead.lead_id, nextAgent);
+        if (!reassignResult.success) {
+          // Lead stays with its current agent and unchecked, so the next cron run retries it.
+          await db.appendLog('ERROR', lead.lead_id, lead.phone, 'OneStop reassignment failed, not reassigned: ' + reassignResult.message, 'FAILED');
+          results.errors++;
+          continue;
+        }
         const reassignSourceConfig = await db.getSourceConfig(lead.lead_source, lead.assigned_source);
         const reassignSendWhatsapp = reassignSourceConfig ? reassignSourceConfig.send_whatsapp !== false : true;
         let waResult = { success: false, message: 'Skipped by source config' };
@@ -236,6 +255,12 @@ async function manuallyAssignLead(lead, { lead_source, assigned_source, priority
   const leadForAssign = { ...lead, lead_source, assigned_source: assigned_source || null, external_id: externalId };
 
   const assignResult = await onestop.assignLead(leadForAssign, agent, priorityScore, oneStopLeadSource);
+
+  // OneStop rejected it: leave the lead unassigned (still retryable) rather
+  // than marking it assigned and messaging the agent.
+  if (!assignResult.success) {
+    return { ok: false, status: 502, message: 'OneStop assignment failed: ' + assignResult.message };
+  }
 
   await db.manualAssignLead(lead.lead_id, agent, {
     lead_source, assigned_source: assigned_source || null, external_id: externalId,
