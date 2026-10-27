@@ -334,3 +334,20 @@ git push
 ```
 
 Railway watches the repo and redeploys automatically.
+
+---
+
+## Troubleshooting: OneStop returns `403 Forbidden`
+
+If the Logs tab shows `ONESTOP_ASSIGN ... [HTTP 403] <html>…403 Forbidden…`, the
+gateway in front of `api.rupeek.com` is blocking this server's outbound IP (a JSON
+403/401 would instead mean the JWT was rejected).
+
+1. Open `/api/diagnostics/onestop` — it reports the outbound IP, the status, and a verdict.
+2. Ask infra to allowlist that IP for `api.rupeek.com/leadsvcapi`.
+3. If the host's outbound IP isn't stable, route OneStop calls through a fixed-IP
+   HTTP(S) proxy: set `ONESTOP_PROXY_URL=http://user:pass@proxy-host:3128` and allowlist
+   the **proxy's** IP once. Only OneStop traffic uses the proxy (Gupshup and the DB do not).
+   `/api/diagnostics/onestop` then reports the proxy's IP (`viaProxy: true`).
+4. Leads that failed meanwhile are kept as `Unassigned - OneStop Failed`; select them in
+   the Leads tab and use **Bulk Assign** to retry.

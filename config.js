@@ -5,6 +5,10 @@ const config = {
   // Onestop APIs
   ONESTOP_BASE_URL: 'https://api.rupeek.com/leadsvcapi/v2/lead',
   ONESTOP_JWT: process.env.ONESTOP_JWT || '',
+  // Optional fixed-IP HTTP(S) proxy for OneStop calls only, e.g.
+  // http://user:pass@proxy-host:3128 — use when api.rupeek.com only allows
+  // allowlisted IPs and this host's outbound IP isn't stable.
+  ONESTOP_PROXY_URL: process.env.ONESTOP_PROXY_URL || '',
 
   // Gupshup WhatsApp
   GUPSHUP_API_URL: 'https://api.gupshup.io/wa/api/v1/template/msg',

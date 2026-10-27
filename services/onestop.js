@@ -1,11 +1,19 @@
 const axios = require('axios');
+const { HttpsProxyAgent } = require('https-proxy-agent');
 const config = require('../config');
 const db = require('./database');
+
+// With ONESTOP_PROXY_URL set, all OneStop traffic tunnels through that proxy
+// (a fixed IP the gateway can allowlist). `proxy: false` stops axios from
+// applying its own, weaker HTTP_PROXY handling on top of the agent.
+const proxyAgent = config.ONESTOP_PROXY_URL ? new HttpsProxyAgent(config.ONESTOP_PROXY_URL) : null;
+const proxyOpts = proxyAgent ? { httpsAgent: proxyAgent, proxy: false } : {};
 
 const onestopClient = axios.create({
   baseURL: config.ONESTOP_BASE_URL,
   timeout: 15000,
   headers: { 'accept': 'application/json, text/plain, */*', 'Content-Type': 'application/json' },
+  ...proxyOpts,
 });
 
 onestopClient.interceptors.request.use((req) => {
@@ -90,7 +98,7 @@ async function updateAssignment(leadId, newAgent) {
  */
 async function diagnose() {
   let egressIp = null;
-  try { egressIp = (await axios.get('https://api.ipify.org', { timeout: 8000 })).data; } catch (_) {}
+  try { egressIp = (await axios.get('https://api.ipify.org', { timeout: 8000, ...proxyOpts })).data; } catch (_) {}
 
   try {
     const params = new URLSearchParams({ assignedTo: 'diagnostic@invalid.local', phone: '0000000000' });
@@ -102,9 +110,9 @@ async function diagnose() {
     if (r.status === 200) verdict = 'OK — OneStop reachable and JWT accepted';
     else if (isHtml) verdict = 'BLOCKED BEFORE THE API — HTML error page from the gateway/WAF; ask infra to allow this server\'s outbound IP';
     else verdict = 'Reached the API but it rejected the request (HTTP ' + r.status + ') — check ONESTOP_JWT';
-    return { egressIp, status: r.status, contentType, bodySnippet: bodyText.slice(0, 200), verdict };
+    return { egressIp, viaProxy: !!proxyAgent, status: r.status, contentType, bodySnippet: bodyText.slice(0, 200), verdict };
   } catch (err) {
-    return { egressIp, status: null, error: err.message, verdict: 'Could not reach OneStop at all: ' + err.message };
+    return { egressIp, viaProxy: !!proxyAgent, status: null, error: err.message, verdict: 'Could not reach OneStop at all: ' + err.message };
   }
 }
 
